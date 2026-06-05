@@ -1,102 +1,91 @@
 # v0.4 Inpainting 当前版本状态
 
-当前状态：`planning`
+当前状态：`completed`
 
 ## 版本目标
 
-`v0.4-inpainting` 的目标是在现有 `v0.3-translation` 基础上，进入图片擦字与回填前的图像处理阶段。
+`v0.4-inpainting` 的目标是在 `v0.3-translation` 基础上，完成从 OCR bbox 到图片擦字、背景修复、中文译文绘制回图片的本地调试闭环。
 
-本阶段计划围绕 OCR block 的 `bbox` 信息，设计并逐步实现：
+本版本仍保持现有 Web 上传、OCR、DeepSeek 翻译和下载链路可用，并通过 debug 输出验证图像处理各阶段结果。
 
-- 根据 OCR 结果生成文字区域 mask。
-- 对原图中文字区域进行擦除或修复。
-- 为后续中文回填预留稳定的图像输出结构。
-- 保持现有 OCR 和翻译链路继续可用。
+## 已完成内容
 
-## 技术方案概述
+- 保留 PaddleOCR OCR 流程。
+- 保留 DeepSeek Translation Provider。
+- 基于 OCR block 的 `bbox.points` 生成二值 mask。
+- 导出 debug mask 图片。
+- 使用 OpenCV `cv2.inpaint` 执行本地背景修复。
+- 导出 debug inpainted background 图片。
+- 使用 PIL 将中文译文绘制到修复后的背景图上。
+- 支持基础中文字体加载、字号估算和自动换行。
+- 导出 debug rendered 图片。
+- 保持 API 响应结构不变。
+- 保持前端展示逻辑不变。
+- 保持 `storage/outputs/` 当前 mock 输出图逻辑不变。
+- 单元测试已覆盖 mask、inpainting、rendering 的基础行为。
 
-计划继续沿用当前主流程：
+## 真实验收结果
+
+真实图片验证已通过：
+
+- OCR 能识别图片文本。
+- DeepSeek 能返回中文译文。
+- 后端能生成 `storage/debug/mask/{job_id}_mask.png`。
+- 后端能生成 `storage/debug/inpainted/{job_id}_inpainted.png`。
+- 后端能生成 `storage/debug/rendered/{job_id}_rendered.png`。
+- rendered debug 图片中，英文原文已被擦除，并写入中文译文。
+
+## Debug 输出目录
 
 ```text
-图片上传
--> PaddleOCR
--> TranslationProvider
--> 基于 OCR bbox 生成 mask
--> 图像修复 / inpainting
--> 输出处理后的图片
+storage/debug/mask/{job_id}_mask.png
+storage/debug/inpainted/{job_id}_inpainted.png
+storage/debug/rendered/{job_id}_rendered.png
 ```
 
-初步技术方向：
+说明：
 
-- 继续使用 `OCRResult / OCRBlock / BBox` 作为文字区域来源。
-- 新增独立图像处理服务，不把擦字逻辑堆进 `app/api/routes.py` 或 `app/main.py`。
-- 优先考虑轻量本地方案，例如 OpenCV mask + inpaint，先完成可验证闭环。
-- 后续再评估更高质量的深度学习 inpainting 方案。
-- 输出图仍写入 `storage/outputs/`，保持现有下载链路兼容。
+- `mask/` 用于检查 OCR polygon 转换出来的文字区域。
+- `inpainted/` 用于检查 OpenCV 背景修复效果。
+- `rendered/` 用于检查译文写回图片后的效果。
 
 ## 本阶段不做什么
 
-`v0.4-inpainting` 第一阶段不做以下内容：
+本版本不处理以下内容：
 
-- 不改 OCR 语言模型配置。
-- 不重构 PaddleOCR 服务。
-- 不改 DeepSeek Provider 架构。
-- 不接入新的真实翻译 Provider。
-- 不实现复杂漫画分镜理解。
-- 不实现中文文字排版回填。
-- 不实现字体匹配。
-- 不实现批量图片处理。
-- 不实现浏览器插件。
-- 不引入账号系统或云端部署。
+- 不优化复杂排版。
+- 不做高级字体匹配。
+- 不做漫画分镜理解。
+- 不做批量图片处理。
+- 不做浏览器插件。
+- 不改 DeepSeek 调用逻辑。
+- 不改 PaddleOCR 识别逻辑。
+- 不改前端展示与 API 响应结构。
 
-## 风险点
+## 已知问题
 
-- OCR bbox 不一定精准，mask 过小会残留文字，mask 过大会破坏背景。
-- OpenCV inpaint 对复杂背景、渐变、网点、漫画纹理的修复质量有限。
-- 日文竖排、艺术字、描边字和气泡文字可能需要特殊 mask 扩张策略。
-- 多段文字相邻时，mask 合并策略可能影响修复质量。
-- 大图处理可能带来 CPU 耗时和内存占用问题。
-- 输出图质量验证需要真实图片样本，单元测试只能覆盖结构和基础流程。
+- 排版比较粗糙。
+- 小字区域字号偏小。
+- OCR 分块导致译文语义有时不自然。
+- 按钮、Logo、特殊图形区域效果一般。
+- OpenCV inpainting 对复杂背景、渐变、纹理和艺术字效果有限。
+- 竖排文字、多行密集文字、描边字仍可能需要专门优化。
 
-## 计划改动文件
+这些问题不在 v0.4 继续处理，留到下一阶段。
 
-预计可能新增或修改：
+## 下一版本建议
 
-- `app/core/config.py`
-  - 增加 inpainting 开关、mask padding、inpaint 参数等配置。
-- `app/models/schemas.py`
-  - 如有需要，补充 inpainting 结果结构或状态字段。
-- `app/services/image_render_service.py`
-  - 从当前 mock 原图复制升级为调用图像处理服务。
-- `app/services/inpainting_service.py`
-  - 新增独立擦字 / 修复服务。
-- `app/api/routes.py`
-  - 保持薄调用层，只串联服务和返回结果。
-- `requirements.txt`
-  - 如需 OpenCV，再新增轻量依赖。
-- `tests/test_inpainting_service.py`
-  - 覆盖 mask 生成、空 bbox、异常 fallback 等场景。
-- `README.md`
-  - 补充 v0.4 本地验证说明。
-- `docs/version_status_v0.4-inpainting.md`
-  - 持续记录本阶段状态。
+建议下一阶段命名为 `v0.5-layout`。
 
-## 验收标准
+优先目标：
 
-本阶段完成时应满足：
+- 优化译文排版。
+- 优化字号估算。
+- 优化换行策略。
+- 优化不同 bbox 下的文字对齐。
+- 评估 OCR block 合并策略，减少逐块翻译导致的语义割裂。
+- 针对按钮、Logo、特殊区域增加跳过或弱处理策略。
 
-- 上传图片后，OCR 和翻译链路仍正常。
-- 后端能基于 OCR bbox 生成文字区域 mask。
-- 输出图不再只是原图复制，而是经过本地 inpainting 处理。
-- 擦字失败时接口不崩溃，能保留可诊断错误或 fallback。
-- `storage/uploads/` 继续保存原图。
-- `storage/outputs/` 继续生成可下载输出图。
-- 前端仍能显示原图、输出图、OCR 文本、翻译结果和下载按钮。
-- 单元测试覆盖核心图像处理逻辑。
-- 不提交 `.env`、测试图片或真实 API Key。
+## 当前结论
 
-## 当前状态
-
-`planning`
-
-当前仅创建 v0.4 规划文档，尚未修改任何业务代码。
+`v0.4-inpainting` 已完成本地调试闭环，可以作为阶段版本封版。
