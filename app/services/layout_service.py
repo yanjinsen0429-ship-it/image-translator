@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from app.utils.geometry import (
     BBox,
+    bbox_center,
     bbox_height,
     bbox_union,
     bbox_width,
@@ -114,6 +115,15 @@ def merge_ocr_blocks(
 
     for block in typed_blocks:
         if block["block_type"] != "normal":
+            if current_group:
+                previous = current_group[-1]
+                if len(current_group) == 1 and _should_merge_button_pair(previous, block):
+                    layout_blocks.append(_group_to_layout_block([previous, block], block_type="button"))
+                    current_group.clear()
+                    continue
+                if len(current_group) > 1 and _should_extend_paragraph_with_short_cta(previous, block):
+                    current_group.append(block)
+                    continue
             flush_group()
             layout_blocks.append(_single_to_layout_block(block))
             continue
@@ -146,6 +156,43 @@ def _should_merge(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
     )
 
 
+def _should_merge_button_pair(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
+    bbox_a = block_a["bbox"]
+    bbox_b = block_b["bbox"]
+    union_bbox = bbox_union([bbox_a, bbox_b])
+    max_height = max(bbox_height(bbox_a), bbox_height(bbox_b))
+    center_a = bbox_center(bbox_a)
+    center_b = bbox_center(bbox_b)
+    center_y_delta = abs(center_a[1] - center_b[1])
+    horizontal_gap = _horizontal_gap(bbox_a, bbox_b)
+    combined_text = _join_texts([block_a["text"], block_b["text"]])
+    union_height = bbox_height(union_bbox)
+    union_aspect_ratio = bbox_width(union_bbox) / union_height if union_height > 0 else 0
+
+    return (
+        _is_short_text(block_a["text"])
+        and _is_short_text(block_b["text"])
+        and _is_button_phrase(combined_text)
+        and height_similarity_ratio(bbox_a, bbox_b) >= 0.65
+        and vertical_gap(bbox_a, bbox_b) <= max_height * 0.35
+        and center_y_delta <= max_height * 0.45
+        and horizontal_gap <= max_height * 0.75
+        and union_aspect_ratio >= 2.0
+    )
+
+
+def _should_extend_paragraph_with_short_cta(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
+    bbox_a = block_a["bbox"]
+    bbox_b = block_b["bbox"]
+    max_height = max(bbox_height(bbox_a), bbox_height(bbox_b))
+    return (
+        _is_short_text(block_b["text"])
+        and vertical_gap(bbox_a, bbox_b) <= max_height * 1.2
+        and horizontal_overlap_ratio(bbox_a, bbox_b) >= 0.4
+        and height_similarity_ratio(bbox_a, bbox_b) >= 0.6
+    )
+
+
 def _single_to_layout_block(block: dict[str, Any]) -> LayoutBlock:
     return LayoutBlock(
         id=f"layout_{block['id']}",
@@ -158,17 +205,17 @@ def _single_to_layout_block(block: dict[str, Any]) -> LayoutBlock:
     )
 
 
-def _group_to_layout_block(group: list[dict[str, Any]]) -> LayoutBlock:
+def _group_to_layout_block(group: list[dict[str, Any]], block_type: BlockType | None = None) -> LayoutBlock:
     union_bbox = bbox_union([block["bbox"] for block in group])
     source_ids = [block["id"] for block in group]
-    text = " ".join(block["text"].strip() for block in group if block["text"].strip())
+    text = _join_texts([block["text"] for block in group])
     return LayoutBlock(
         id="layout_" + "_".join(source_ids),
         text=text,
         polygon=_bbox_to_polygon(union_bbox),
         bbox=union_bbox,
         source_block_ids=source_ids,
-        block_type="paragraph" if len(group) > 1 else "normal",
+        block_type=block_type or ("paragraph" if len(group) > 1 else "normal"),
         confidence=_average_confidence(group),
     )
 
@@ -237,3 +284,33 @@ def _is_standalone_cta(text: str) -> bool:
         "sign up",
         "continue",
     }
+
+
+def _is_button_phrase(text: str) -> bool:
+    return text.strip().lower() in {
+        "abuse report",
+        "submit",
+        "cancel",
+        "report",
+        "login",
+        "log in",
+        "sign up",
+        "continue",
+    }
+
+
+def _is_short_text(text: str) -> bool:
+    words = text.strip().split()
+    return bool(text.strip()) and (len(text.strip()) <= 18 or len(words) <= 3)
+
+
+def _join_texts(texts: list[str]) -> str:
+    return " ".join(text.strip() for text in texts if text.strip())
+
+
+def _horizontal_gap(bbox_a: BBox, bbox_b: BBox) -> float:
+    left = min(bbox_a, bbox_b, key=lambda bbox: bbox[0])
+    right = max(bbox_a, bbox_b, key=lambda bbox: bbox[0])
+    if float(right[0]) <= float(left[2]):
+        return 0.0
+    return float(right[0]) - float(left[2])

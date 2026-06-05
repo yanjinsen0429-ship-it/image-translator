@@ -124,6 +124,57 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertEqual(merged.text, "Line one Line two")
         self.assertNotIn("\n", merged.text)
 
+    def test_button_horizontal_text_blocks_are_merged(self) -> None:
+        blocks = [
+            make_block("Abuse", (247, 693, 380, 734), "abuse"),
+            make_block("report", (379, 696, 512, 738), "report"),
+        ]
+
+        layout_blocks = merge_ocr_blocks(blocks)
+
+        self.assertEqual(len(layout_blocks), 1)
+        self.assertEqual(layout_blocks[0].text, "Abuse report")
+        self.assertEqual(layout_blocks[0].block_type, "button")
+        self.assertEqual(layout_blocks[0].source_block_ids, ["abuse", "report"])
+
+    def test_paragraph_is_not_classified_as_button_merge(self) -> None:
+        blocks = [
+            make_block("Don't lose years of work", (20, 20, 220, 44), "a"),
+            make_block("to one malicious abuse", (22, 48, 230, 72), "b"),
+            make_block("report", (24, 76, 120, 100), "c"),
+        ]
+
+        layout_blocks = merge_ocr_blocks(blocks)
+
+        self.assertEqual(len(layout_blocks), 1)
+        self.assertEqual(
+            layout_blocks[0].text,
+            "Don't lose years of work to one malicious abuse report",
+        )
+        self.assertEqual(layout_blocks[0].block_type, "paragraph")
+
+    def test_far_apart_short_text_blocks_are_not_button_merged(self) -> None:
+        blocks = [
+            make_block("Abuse", (20, 20, 90, 44), "abuse"),
+            make_block("report", (220, 22, 300, 46), "report"),
+        ]
+
+        layout_blocks = merge_ocr_blocks(blocks)
+
+        self.assertEqual(len(layout_blocks), 2)
+        self.assertNotEqual(layout_blocks[0].text, "Abuse report")
+
+    def test_different_height_short_text_blocks_are_not_button_merged(self) -> None:
+        blocks = [
+            make_block("Abuse", (20, 20, 170, 74), "abuse"),
+            make_block("report", (172, 42, 230, 62), "report"),
+        ]
+
+        layout_blocks = merge_ocr_blocks(blocks)
+
+        self.assertEqual(len(layout_blocks), 2)
+        self.assertNotEqual(layout_blocks[0].text, "Abuse report")
+
 
 if __name__ == "__main__":
     unittest.main()
