@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from app.services.inpainting_service import InpaintingService
 from app.utils import image_mask
@@ -90,6 +91,48 @@ class InpaintingServiceSkeletonTest(unittest.TestCase):
 
             self.assertEqual(output_path, Path(tmp) / "mask" / "image-123_mask.png")
             self.assertTrue(output_path.exists())
+
+    def test_remove_text_inpaints_mask_area_and_preserves_unmasked_area(self) -> None:
+        service = InpaintingService()
+        image = np.full((24, 24, 3), 255, dtype=np.uint8)
+        image[8:16, 8:16] = 0
+        mask = np.zeros((24, 24), dtype=np.uint8)
+        mask[8:16, 8:16] = 255
+
+        result = service.remove_text(image, mask)
+
+        self.assertEqual(result.shape, image.shape)
+        self.assertFalse(np.array_equal(result[12, 12], image[12, 12]))
+        self.assertTrue(np.array_equal(result[2, 2], image[2, 2]))
+
+    def test_export_debug_inpainted_saves_background_png(self) -> None:
+        service = InpaintingService()
+        image = np.full((24, 24, 3), 255, dtype=np.uint8)
+        image[8:16, 8:16] = 0
+        mask = np.zeros((24, 24), dtype=np.uint8)
+        mask[8:16, 8:16] = 255
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            mask_path = root / "mask.png"
+            Image.fromarray(image).save(image_path)
+            Image.fromarray(mask).save(mask_path)
+
+            output_path = service.export_debug_inpainted(
+                image_path=image_path,
+                mask_path=mask_path,
+                debug_inpainted_dir=root / "inpainted",
+                image_id="image-123",
+            )
+
+            self.assertEqual(
+                output_path,
+                root / "inpainted" / "image-123_inpainted.png",
+            )
+            self.assertTrue(output_path.exists())
+            with Image.open(output_path) as output_image:
+                self.assertEqual(output_image.size, (24, 24))
 
 
 if __name__ == "__main__":

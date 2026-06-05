@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -62,9 +63,42 @@ class InpaintingService:
         Image.fromarray(expanded).save(output_path)
         return output_path
 
-    def remove_text(self, *args: Any, **kwargs: Any) -> None:
+    def export_debug_inpainted(
+        self,
+        image_path: str | Path,
+        mask_path: str | Path,
+        debug_inpainted_dir: Path,
+        image_id: str,
+        radius: int = 3,
+        algorithm: int | None = None,
+    ) -> Path:
+        """Create and save an inpainted background preview for debugging."""
+        inpainted = self.remove_text(
+            image=image_path,
+            mask=mask_path,
+            radius=radius,
+            algorithm=algorithm,
+        )
+        debug_inpainted_dir.mkdir(parents=True, exist_ok=True)
+        output_path = debug_inpainted_dir / f"{image_id}_inpainted.png"
+        Image.fromarray(inpainted).save(output_path)
+        return output_path
+
+    def remove_text(
+        self,
+        image: str | Path | np.ndarray,
+        mask: str | Path | np.ndarray,
+        radius: int = 3,
+        algorithm: int | None = None,
+    ) -> np.ndarray:
         """Remove text from an image using a prepared mask."""
-        return None
+        image_array = self._load_image_array(image)
+        mask_array = self._load_mask_array(mask)
+        if mask_array.shape != image_array.shape[:2]:
+            raise ValueError("Mask size must match image size.")
+
+        method = cv2.INPAINT_TELEA if algorithm is None else algorithm
+        return cv2.inpaint(image_array, mask_array, radius, method)
 
     def _resolve_image_size(
         self,
@@ -98,3 +132,33 @@ class InpaintingService:
             if len(polygon) >= 3:
                 polygons.append(polygon)
         return polygons
+
+    def _load_image_array(self, image: str | Path | np.ndarray) -> np.ndarray:
+        if isinstance(image, np.ndarray):
+            image_array = image
+        else:
+            with Image.open(image) as loaded_image:
+                image_array = np.array(loaded_image.convert("RGB"), dtype=np.uint8)
+
+        if image_array.dtype != np.uint8:
+            image_array = np.clip(image_array, 0, 255).astype(np.uint8)
+        if image_array.ndim == 2:
+            image_array = np.stack([image_array] * 3, axis=-1)
+        if image_array.ndim != 3 or image_array.shape[2] not in {3, 4}:
+            raise ValueError("Image must be a grayscale, RGB, or RGBA array.")
+        if image_array.shape[2] == 4:
+            image_array = image_array[:, :, :3]
+        return image_array
+
+    def _load_mask_array(self, mask: str | Path | np.ndarray) -> np.ndarray:
+        if isinstance(mask, np.ndarray):
+            mask_array = mask
+        else:
+            with Image.open(mask) as loaded_mask:
+                mask_array = np.array(loaded_mask.convert("L"), dtype=np.uint8)
+
+        if mask_array.ndim == 3:
+            mask_array = mask_array[:, :, 0]
+        if mask_array.dtype != np.uint8:
+            mask_array = np.clip(mask_array, 0, 255).astype(np.uint8)
+        return np.where(mask_array > 0, 255, 0).astype(np.uint8)

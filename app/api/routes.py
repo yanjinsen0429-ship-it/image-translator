@@ -53,12 +53,20 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
     try:
-        InpaintingService().export_debug_mask(
+        inpainting_service = InpaintingService()
+        mask_path = inpainting_service.export_debug_mask(
             ocr_result=ocr_result,
             image_path=input_path,
             debug_mask_dir=settings.debug_dir / "mask",
             image_id=job_id,
         )
+        if mask_path is not None:
+            inpainting_service.export_debug_inpainted(
+                image_path=input_path,
+                mask_path=mask_path,
+                debug_inpainted_dir=settings.debug_dir / "inpainted",
+                image_id=job_id,
+            )
     except Exception:
         logger.exception("Failed to export debug OCR mask for job %s", job_id)
 
