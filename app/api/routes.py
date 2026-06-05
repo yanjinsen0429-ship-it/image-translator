@@ -13,6 +13,7 @@ from app.services.file_service import (
 from app.services.image_render_service import create_mock_output_image
 from app.services.inpainting_service import InpaintingService
 from app.services.ocr_service import create_ocr_result
+from app.services.rendering_service import RenderingService
 from app.services.translation_service import create_translation_result
 
 router = APIRouter()
@@ -52,6 +53,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
+    inpainted_path = None
     try:
         inpainting_service = InpaintingService()
         mask_path = inpainting_service.export_debug_mask(
@@ -61,7 +63,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
             image_id=job_id,
         )
         if mask_path is not None:
-            inpainting_service.export_debug_inpainted(
+            inpainted_path = inpainting_service.export_debug_inpainted(
                 image_path=input_path,
                 mask_path=mask_path,
                 debug_inpainted_dir=settings.debug_dir / "inpainted",
@@ -74,6 +76,16 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
         ocr_result=ocr_result,
     )
+    try:
+        if inpainted_path is not None:
+            RenderingService().export_debug_rendered(
+                image_path=inpainted_path,
+                translation_items=translation_result.get("items", []),
+                debug_rendered_dir=settings.debug_dir / "rendered",
+                image_id=job_id,
+            )
+    except Exception:
+        logger.exception("Failed to export debug rendered image for job %s", job_id)
 
     return {
         "job_id": job_id,
