@@ -49,16 +49,20 @@ function renderResult(data) {
   const ocrLines = data.ocr_result.blocks.map((block) => block.text);
   const translationLines = data.translation_result.items.map((item, index) => {
     const label = item.block_id || `block-${index + 1}`;
-    return [
+    const lines = [
       `${label}`,
       `原文：${item.source_text || ""}`,
       `译文：${item.translated_text || ""}`,
       `provider：${item.provider || data.translation_result.provider || "unknown"}`,
-    ].join("\n");
+    ];
+    if (item.error) {
+      lines.push(`error：${item.error}`);
+    }
+    return lines.join("\n");
   });
 
-  ocrText.textContent = ocrLines.join("\n") || "没有 mock OCR 文本";
-  translationText.textContent = translationLines.join("\n\n") || "没有 mock 翻译文本";
+  ocrText.textContent = ocrLines.join("\n") || "没有 OCR 文本";
+  translationText.textContent = translationLines.join("\n\n") || "没有翻译文本";
 }
 
 function extractErrorMessage(errorPayload) {
@@ -107,7 +111,7 @@ form.addEventListener("submit", async (event) => {
   formData.append("file", file);
 
   submitButton.disabled = true;
-  setMessage("正在上传并生成 mock 输出图...");
+  setMessage("正在上传并翻译...");
 
   try {
     const response = await fetch("/api/images/translate", {
@@ -121,7 +125,7 @@ form.addEventListener("submit", async (event) => {
     }
 
     renderResult(data);
-    setMessage("mock 处理完成。", "success");
+    setMessage("处理完成。", "success");
   } catch (error) {
     resetResult();
     setMessage(extractErrorMessage(error), "error");

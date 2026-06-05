@@ -1,10 +1,14 @@
 import os
 import unittest
-from unittest.mock import patch
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from app.services.translation_service import (
+    DeepSeekTranslationProvider,
     MockTranslationProvider,
     create_translation_result,
+    get_translation_provider,
 )
 
 
@@ -99,11 +103,22 @@ class MockTranslationProviderTests(unittest.TestCase):
 
 
 class TranslationServiceTests(unittest.TestCase):
-    def test_create_translation_result_handles_multiple_ocr_blocks(self):
-        result = create_translation_result(
-            job_id="job-translation",
-            ocr_result=make_ocr_result(),
+    def make_mock_settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            translation_provider="mock",
+            translation_target_language="zh-CN",
+            deepseek_api_key="",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_timeout_seconds=30,
         )
+
+    def test_create_translation_result_handles_multiple_ocr_blocks(self):
+        with patch("app.services.translation_service.settings", self.make_mock_settings()):
+            result = create_translation_result(
+                job_id="job-translation",
+                ocr_result=make_ocr_result(),
+            )
 
         self.assertEqual(result["job_id"], "job-translation")
         self.assertEqual(result["provider"], "mock")
@@ -123,7 +138,10 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(result["items"][2]["confidence"], 0.9)
 
     def test_create_translation_result_does_not_require_api_key(self):
-        with patch.dict(os.environ, {}, clear=True):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("app.services.translation_service.settings", self.make_mock_settings()),
+        ):
             result = create_translation_result(
                 job_id="job-no-key",
                 ocr_result=make_ocr_result(),
@@ -132,6 +150,116 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(result["provider"], "mock")
         self.assertEqual(len(result["items"]), 3)
         self.assertEqual(result["errors"], [])
+
+    def test_deepseek_without_api_key_falls_back_to_mock(self):
+        fake_settings = SimpleNamespace(
+            translation_provider="deepseek",
+            translation_target_language="zh-CN",
+            deepseek_api_key="",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_timeout_seconds=30,
+        )
+
+        with patch("app.services.translation_service.settings", fake_settings):
+            provider = get_translation_provider()
+            result = create_translation_result(
+                job_id="job-deepseek-no-key",
+                ocr_result=make_ocr_result(),
+            )
+
+        self.assertIsInstance(provider, MockTranslationProvider)
+        self.assertEqual(result["provider"], "mock")
+        self.assertEqual(len(result["items"]), 3)
+        self.assertTrue(
+            any(
+                warning["code"] == "TRANSLATION_FALLBACK_TO_MOCK"
+                for warning in result["warnings"]
+            )
+        )
+
+
+class DeepSeekTranslationProviderTests(unittest.TestCase):
+    def make_provider(self) -> DeepSeekTranslationProvider:
+        return DeepSeekTranslationProvider(
+            target_language="zh-CN",
+            api_key="test-key",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            timeout_seconds=30,
+        )
+
+    def test_deepseek_provider_can_be_instantiated(self):
+        provider = self.make_provider()
+
+        self.assertEqual(provider.provider_name, "deepseek")
+        self.assertEqual(provider.target_language, "zh-CN")
+
+    def test_deepseek_batch_translation_preserves_input_order(self):
+        provider = self.make_provider()
+        blocks = make_ocr_result()["blocks"]
+
+        with patch.object(
+            provider,
+            "_request_translation",
+            side_effect=["你好世界", "你好，世界", "你好"],
+        ):
+            results = provider.translate_blocks(blocks)
+
+        self.assertEqual(
+            [item["block_id"] for item in results],
+            ["block-1", "block-2", "block-3"],
+        )
+        self.assertEqual(
+            [item["source_text"] for item in results],
+            ["你好世界", "Hello World", "こんにちは"],
+        )
+        self.assertEqual(
+            [item["translated_text"] for item in results],
+            ["你好世界", "你好，世界", "你好"],
+        )
+        self.assertTrue(all(item["provider"] == "deepseek" for item in results))
+        self.assertTrue(all(item["error"] is None for item in results))
+
+    def test_deepseek_api_exception_returns_failed_item(self):
+        provider = self.make_provider()
+
+        with (
+            patch.object(
+                provider,
+                "_request_translation",
+                side_effect=RuntimeError("network unavailable"),
+            ),
+            patch("app.services.translation_service.logger.exception"),
+        ):
+            result = provider.translate_text(
+                text="Hello World",
+                block_id="block-error",
+                source_language="en",
+            )
+
+        self.assertEqual(result["block_id"], "block-error")
+        self.assertEqual(result["source_text"], "Hello World")
+        self.assertEqual(result["translated_text"], "")
+        self.assertEqual(result["provider"], "deepseek")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("network unavailable", result["error"])
+
+    def test_deepseek_request_disables_thinking_for_translation(self):
+        provider = self.make_provider()
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "你好世界"}}]},
+        ).encode("utf-8")
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            translated_text = provider._request_translation("Hello World")
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(translated_text, "你好世界")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["temperature"], 0)
 
 
 if __name__ == "__main__":

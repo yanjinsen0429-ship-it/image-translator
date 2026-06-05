@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>本地图片翻译 mock MVP</title>
+    <title>本地图片翻译</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
@@ -12,7 +12,7 @@
         <header class="topbar">
           <div>
             <h1>本地图片翻译</h1>
-            <p>v0.1 mock 闭环</p>
+            <p>v0.3 OCR + DeepSeek 翻译</p>
           </div>
           <span class="badge">PNG / JPG / JPEG / WEBP</span>
         </header>
@@ -22,7 +22,7 @@
             <span>选择单张图片</span>
             <input id="imageInput" name="file" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
           </label>
-          <button id="submitButton" type="submit">上传并生成 mock 结果</button>
+          <button id="submitButton" type="submit">上传并翻译</button>
         </form>
 
         <p id="message" class="message" role="status"></p>
@@ -37,12 +37,12 @@
           </article>
 
           <article class="preview-pane">
-            <h2>mock 输出图</h2>
+            <h2>输出图预览（当前仍为原图复制）</h2>
             <div class="image-frame">
-              <img id="outputPreview" alt="mock 输出图预览">
+              <img id="outputPreview" alt="输出图预览">
               <span id="outputEmpty">上传后显示结果</span>
             </div>
-            <a id="downloadLink" class="download-link" href="#" download hidden>下载 mock 输出图</a>
+            <a id="downloadLink" class="download-link" href="#" download hidden>下载输出图</a>
           </article>
         </section>
 

@@ -174,10 +174,19 @@ class RouteCompatibilityTests(unittest.TestCase):
                 allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
                 max_upload_bytes=10 * 1024 * 1024,
             )
+            fake_translation_settings = SimpleNamespace(
+                translation_provider="mock",
+                translation_target_language="zh-CN",
+                deepseek_api_key="",
+                deepseek_base_url="https://api.deepseek.com",
+                deepseek_model="deepseek-v4-flash",
+                deepseek_timeout_seconds=30,
+            )
 
             with (
                 patch("app.api.routes.settings", fake_settings),
                 patch("app.services.file_service.settings", fake_settings),
+                patch("app.services.translation_service.settings", fake_translation_settings),
                 patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
             ):
                 result = asyncio.run(translate_image(FakeUpload()))
