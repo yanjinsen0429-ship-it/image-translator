@@ -62,16 +62,21 @@ class MockTranslationProvider:
         )
 
     def translate_blocks(self, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            self.translate_text(
-                text=block.get("text", ""),
-                block_id=block.get("id", ""),
-                source_language=block.get("language"),
-                bbox=block.get("bbox"),
-                confidence=block.get("confidence"),
+        items = []
+        for block in blocks:
+            if _should_skip_translation(block):
+                items.append(_build_skipped_translation_item(block, self))
+                continue
+            items.append(
+                self.translate_text(
+                    text=block.get("text", ""),
+                    block_id=block.get("id", ""),
+                    source_language=block.get("language"),
+                    bbox=block.get("bbox"),
+                    confidence=block.get("confidence"),
+                )
             )
-            for block in blocks
-        ]
+        return items
 
 
 class DeepSeekTranslationProvider:
@@ -144,16 +149,21 @@ class DeepSeekTranslationProvider:
         )
 
     def translate_blocks(self, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            self.translate_text(
-                text=block.get("text", ""),
-                block_id=block.get("id", ""),
-                source_language=block.get("language"),
-                bbox=block.get("bbox"),
-                confidence=block.get("confidence"),
+        items = []
+        for block in blocks:
+            if _should_skip_translation(block):
+                items.append(_build_skipped_translation_item(block, self))
+                continue
+            items.append(
+                self.translate_text(
+                    text=block.get("text", ""),
+                    block_id=block.get("id", ""),
+                    source_language=block.get("language"),
+                    bbox=block.get("bbox"),
+                    confidence=block.get("confidence"),
+                )
             )
-            for block in blocks
-        ]
+        return items
 
     def _request_translation(self, text: str) -> str:
         payload = {
@@ -270,6 +280,29 @@ def _build_translation_item(
         "status": status,
         "error": error,
     }
+
+
+def _should_skip_translation(block: dict[str, Any]) -> bool:
+    return block.get("block_type") in {"logo", "ignored"}
+
+
+def _build_skipped_translation_item(
+    block: dict[str, Any],
+    provider: TranslationProvider,
+) -> dict[str, Any]:
+    text = block.get("text", "")
+    return _build_translation_item(
+        block_id=block.get("id", ""),
+        source_text=text,
+        translated_text=text,
+        source_language=block.get("language"),
+        target_language=provider.target_language,
+        provider=provider.provider_name,
+        bbox=block.get("bbox"),
+        confidence=block.get("confidence"),
+        status="skipped",
+        error=None,
+    )
 
 
 def _build_translation_warnings(actual_provider_name: str) -> list[dict[str, Any]]:

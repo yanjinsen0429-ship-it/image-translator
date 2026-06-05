@@ -12,6 +12,7 @@ from app.services.file_service import (
 )
 from app.services.image_render_service import create_mock_output_image
 from app.services.inpainting_service import InpaintingService
+from app.services.layout_service import LayoutBlock, merge_ocr_blocks
 from app.services.ocr_service import create_ocr_result
 from app.services.rendering_service import RenderingService
 from app.services.translation_service import create_translation_result
@@ -53,6 +54,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
+    translation_input = _create_translation_input_from_layout(ocr_result)
     inpainted_path = None
     try:
         inpainting_service = InpaintingService()
@@ -74,7 +76,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
 
     translation_result = create_translation_result(
         job_id=job_id,
-        ocr_result=ocr_result,
+        ocr_result=translation_input,
     )
     try:
         if inpainted_path is not None:
@@ -106,4 +108,55 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
             }
         ],
         "errors": [],
+    }
+
+
+def _create_translation_input_from_layout(ocr_result: dict) -> dict:
+    try:
+        layout_blocks = merge_ocr_blocks(
+            ocr_result.get("blocks", []),
+            image_size=_ocr_image_size(ocr_result),
+        )
+    except Exception:
+        logger.exception("Failed to merge OCR blocks for layout; falling back to OCR blocks.")
+        return ocr_result
+
+    return {
+        **ocr_result,
+        "blocks": [_layout_block_to_translation_block(block) for block in layout_blocks],
+        "raw": {
+            **(ocr_result.get("raw") or {}),
+            "layout_enabled": True,
+            "layout_block_count": len(layout_blocks),
+        },
+    }
+
+
+def _ocr_image_size(ocr_result: dict) -> tuple[int, int] | None:
+    width = ocr_result.get("image_width")
+    height = ocr_result.get("image_height")
+    if width and height:
+        return int(width), int(height)
+    return None
+
+
+def _layout_block_to_translation_block(block: LayoutBlock) -> dict:
+    x1, y1, x2, y2 = block.bbox
+    return {
+        "id": block.id,
+        "text": block.text,
+        "bbox": {
+            "x": round(float(x1)),
+            "y": round(float(y1)),
+            "width": round(float(x2) - float(x1)),
+            "height": round(float(y2) - float(y1)),
+            "points": block.polygon,
+        },
+        "confidence": block.confidence,
+        "line_index": 0,
+        "language": None,
+        "source_items": [],
+        "block_type": block.block_type,
+        "source_block_ids": block.source_block_ids,
+        "polygon": block.polygon,
     }
