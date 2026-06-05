@@ -185,6 +185,11 @@ class RouteCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["ocr_result"]["blocks"][0]["text"], "Real OCR text")
         self.assertEqual(result["translation_result"]["provider"], "mock")
+        self.assertEqual(
+            result["translation_result"]["items"][0]["source_text"],
+            "Real OCR text",
+        )
+        self.assertEqual(result["translation_result"]["items"][0]["provider"], "mock")
         self.assertIn("/storage/uploads/", result["input_file"])
         self.assertIn("/storage/outputs/", result["output_file"])
         self.assertEqual(result["download_url"], result["output_file"])

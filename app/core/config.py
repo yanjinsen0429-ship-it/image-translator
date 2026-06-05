@@ -36,6 +36,12 @@ class Settings:
     ocr_fallback_to_mock: bool = field(
         default_factory=lambda: _env_bool("OCR_FALLBACK_TO_MOCK", True)
     )
+    translation_provider: str = field(
+        default_factory=lambda: os.getenv("TRANSLATION_PROVIDER", "mock")
+    )
+    translation_target_language: str = field(
+        default_factory=lambda: os.getenv("TRANSLATION_TARGET_LANGUAGE", "zh-CN")
+    )
 
 
 settings = Settings()

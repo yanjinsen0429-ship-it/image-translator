@@ -47,10 +47,18 @@ function renderResult(data) {
   downloadLink.hidden = false;
 
   const ocrLines = data.ocr_result.blocks.map((block) => block.text);
-  const translationLines = data.translation_result.items.map((item) => item.translated_text);
+  const translationLines = data.translation_result.items.map((item, index) => {
+    const label = item.block_id || `block-${index + 1}`;
+    return [
+      `${label}`,
+      `原文：${item.source_text || ""}`,
+      `译文：${item.translated_text || ""}`,
+      `provider：${item.provider || data.translation_result.provider || "unknown"}`,
+    ].join("\n");
+  });
 
   ocrText.textContent = ocrLines.join("\n") || "没有 mock OCR 文本";
-  translationText.textContent = translationLines.join("\n") || "没有 mock 翻译文本";
+  translationText.textContent = translationLines.join("\n\n") || "没有 mock 翻译文本";
 }
 
 function extractErrorMessage(errorPayload) {

@@ -10,7 +10,7 @@ from app.services.file_service import (
 )
 from app.services.image_render_service import create_mock_output_image
 from app.services.ocr_service import create_ocr_result
-from app.services.translation_service import create_mock_translation_result
+from app.services.translation_service import create_translation_result
 
 router = APIRouter()
 
@@ -48,7 +48,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
-    translation_result = create_mock_translation_result(
+    translation_result = create_translation_result(
         job_id=job_id,
         ocr_result=ocr_result,
     )

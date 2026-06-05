@@ -43,6 +43,11 @@ class TranslationItem(BaseModel):
     block_id: str
     source_text: str
     translated_text: str
+    source_language: str | None = None
+    target_language: str
+    provider: str
+    bbox: BBox | None = None
+    confidence: float | None = None
     status: Literal["success", "skipped", "failed"]
     error: str | None = None
 
@@ -51,7 +56,7 @@ class TranslationResult(BaseModel):
     job_id: str
     items: list[TranslationItem]
     provider: str
-    source_language: str
+    source_language: str | None = None
     target_language: str
     warnings: list[Issue] = []
     errors: list[Issue] = []
