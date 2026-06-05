@@ -1,4 +1,6 @@
 import logging
+import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -80,11 +82,16 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     )
     try:
         if inpainted_path is not None:
-            RenderingService().export_debug_rendered(
+            rendered_path = RenderingService().export_debug_rendered(
                 image_path=inpainted_path,
                 translation_items=translation_result.get("items", []),
                 debug_rendered_dir=settings.debug_dir / "rendered",
                 image_id=job_id,
+            )
+            output_path = _publish_rendered_output(
+                rendered_path=rendered_path,
+                output_dir=settings.output_dir,
+                job_id=job_id,
             )
     except Exception:
         logger.exception("Failed to export debug rendered image for job %s", job_id)
@@ -130,6 +137,13 @@ def _create_translation_input_from_layout(ocr_result: dict) -> dict:
             "layout_block_count": len(layout_blocks),
         },
     }
+
+
+def _publish_rendered_output(rendered_path: Path, output_dir: Path, job_id: str) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{job_id}_output.png"
+    shutil.copyfile(rendered_path, output_path)
+    return output_path
 
 
 def _ocr_image_size(ocr_result: dict) -> tuple[int, int] | None:

@@ -123,6 +123,19 @@ class RenderingServiceSkeletonTest(unittest.TestCase):
         self.assertGreater(layout["start_x"], bbox["x"])
         self.assertGreater(layout["start_y"], bbox["y"])
 
+    def test_short_text_prefers_single_line_when_it_can_fit(self) -> None:
+        service = RenderingService()
+        bbox = {"x": 0, "y": 0, "width": 189, "height": 113}
+
+        layout = service.calculate_text_layout(
+            text="您的域名",
+            bbox=bbox,
+            block_type="paragraph",
+        )
+
+        self.assertEqual(layout["lines"], ["您的域名"])
+        self.assertLessEqual(layout["text_width"], bbox["width"])
+
     def test_multiline_text_total_height_fits_bbox_when_possible(self) -> None:
         service = RenderingService()
         bbox = {"x": 0, "y": 0, "width": 140, "height": 72}
@@ -173,6 +186,34 @@ class RenderingServiceSkeletonTest(unittest.TestCase):
         )
 
         self.assertEqual(rendered.size, image.size)
+
+    def test_choose_white_text_on_dark_background(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (80, 40), (16, 20, 34))
+        bbox = {"x": 10, "y": 5, "width": 50, "height": 24}
+
+        color = service.choose_text_color(image, bbox)
+
+        self.assertEqual(color, (255, 255, 255))
+
+    def test_choose_black_text_on_light_background(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (80, 40), (238, 240, 242))
+        bbox = {"x": 10, "y": 5, "width": 50, "height": 24}
+
+        color = service.choose_text_color(image, bbox)
+
+        self.assertEqual(color, (0, 0, 0))
+
+    def test_rendering_uses_adaptive_text_color_without_crashing(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (120, 60), (18, 22, 35))
+        bbox = {"x": 10, "y": 10, "width": 90, "height": 32}
+
+        rendered = service.draw_translation(image, bbox, "高对比文字")
+
+        self.assertEqual(rendered.size, image.size)
+        self.assertEqual(service.choose_text_color(image, bbox), (255, 255, 255))
 
 
 if __name__ == "__main__":

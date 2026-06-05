@@ -1,9 +1,12 @@
 import asyncio
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from PIL import Image
 
 from app.api.routes import translate_image
 from app.services.translation_service import MockTranslationProvider
@@ -105,6 +108,41 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(result[0]["status"], "success")
         self.assertEqual(result[0]["source_text"], "Hello World")
 
+    def test_final_output_uses_rendered_image_when_rendering_succeeds(self) -> None:
+        rendered_pixel = (12, 34, 56)
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            debug_rendered_dir.mkdir(parents=True, exist_ok=True)
+            rendered_path = debug_rendered_dir / f"{image_id}_rendered.png"
+            Image.new("RGB", (8, 8), rendered_pixel).save(rendered_path)
+            return rendered_path
+
+        result, root = self._run_route_with_valid_image(
+            fake_ocr_result=self._make_single_block_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=fake_debug_rendered,
+        )
+
+        output_path = root / result["output_file"].replace("/storage/", "")
+        rendered_path = root / "debug" / "rendered" / f"{result['job_id']}_rendered.png"
+
+        self.assertEqual(result["download_url"], result["output_file"])
+        self.assertIn("/storage/outputs/", result["output_file"])
+        self.assertTrue(rendered_path.exists())
+        self.assertTrue(output_path.exists())
+        self.assertNotEqual(output_path, rendered_path)
+        with Image.open(output_path) as output_image:
+            self.assertNotEqual(output_image.getpixel((0, 0)), (255, 255, 255))
+            self.assertEqual(output_image.getpixel((0, 0)), rendered_pixel)
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -129,6 +167,56 @@ class LayoutPipelineTests(unittest.TestCase):
                 patch("app.api.routes.create_translation_result", side_effect=translation_side_effect),
             ):
                 return asyncio.run(translate_image(FakeUpload()))
+
+    def _run_route_with_valid_image(
+        self,
+        fake_ocr_result: dict,
+        translation_side_effect,
+        rendered_side_effect,
+    ) -> tuple[dict, Path]:
+        class FakeUpload:
+            filename = "sample.png"
+
+            async def read(self):
+                buffer = io.BytesIO()
+                Image.new("RGB", (8, 8), (255, 255, 255)).save(buffer, format="PNG")
+                return buffer.getvalue()
+
+        root_path = Path(tempfile.mkdtemp())
+        fake_settings = SimpleNamespace(
+            upload_dir=root_path / "uploads",
+            output_dir=root_path / "outputs",
+            debug_dir=root_path / "debug",
+            storage_dir=root_path,
+            allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
+            max_upload_bytes=10 * 1024 * 1024,
+        )
+        mask_path = root_path / "debug" / "mask" / "test_mask.png"
+        inpainted_path = root_path / "debug" / "inpainted" / "test_inpainted.png"
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        inpainted_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("L", (8, 8), 255).save(mask_path)
+        Image.new("RGB", (8, 8), (200, 200, 200)).save(inpainted_path)
+
+        with (
+            patch("app.api.routes.settings", fake_settings),
+            patch("app.services.file_service.settings", fake_settings),
+            patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
+            patch("app.api.routes.create_translation_result", side_effect=translation_side_effect),
+            patch(
+                "app.api.routes.InpaintingService.export_debug_mask",
+                return_value=mask_path,
+            ),
+            patch(
+                "app.api.routes.InpaintingService.export_debug_inpainted",
+                return_value=inpainted_path,
+            ),
+            patch(
+                "app.api.routes.RenderingService.export_debug_rendered",
+                side_effect=rendered_side_effect,
+            ),
+        ):
+            return asyncio.run(translate_image(FakeUpload())), root_path
 
     def _make_multiline_ocr_result(self) -> dict:
         return {
@@ -172,6 +260,22 @@ class LayoutPipelineTests(unittest.TestCase):
             "line_index": 0,
             "language": "en",
             "source_items": [],
+        }
+
+    def _make_single_block_ocr_result(self) -> dict:
+        return {
+            "job_id": "job-layout",
+            "image_width": 8,
+            "image_height": 8,
+            "blocks": [
+                self._make_ocr_block(
+                    block_id="block-1",
+                    text="Hello World",
+                    bbox=(1, 1, 7, 7),
+                ),
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
         }
 
     def _make_translation_result(self, job_id: str, ocr_result: dict) -> dict:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageStat
 
 
 class RenderingService:
@@ -33,6 +33,7 @@ class RenderingService:
         height = max(1, int(bbox.get("height", 1)))
         min_font_size = 10 if block_type == "button" else 12
         max_font_size = max(min_font_size, min(48, int(height * 0.8)))
+        prefer_fewer_lines = len(text.strip()) <= 12 or block_type == "button"
 
         best_layout: dict[str, Any] | None = None
         for font_size in range(max_font_size, min_font_size - 1, -1):
@@ -51,9 +52,15 @@ class RenderingService:
                 text_height=text_height,
                 overflow=overflow,
             )
-            best_layout = layout
+            if best_layout is None:
+                best_layout = layout
+            elif prefer_fewer_lines:
+                best_layout = self._choose_short_text_layout(best_layout, layout)
+            else:
+                best_layout = layout
             if not overflow:
-                break
+                if not prefer_fewer_lines:
+                    break
 
         return best_layout or self._build_layout(
             bbox=bbox,
@@ -100,13 +107,15 @@ class RenderingService:
         image: str | Path | Image.Image,
         bbox: dict[str, Any],
         translated_text: str,
-        fill: tuple[int, int, int] = (0, 0, 0),
+        fill: tuple[int, int, int] | None = None,
         block_type: str = "normal",
     ) -> Image.Image:
         """Draw translated text onto an image."""
         output = self._load_image(image)
         if not translated_text:
             return output
+        text_fill = fill or self.choose_text_color(output, bbox)
+        stroke_fill = self._contrast_stroke_color(text_fill)
 
         layout = self.calculate_text_layout(
             text=translated_text,
@@ -122,7 +131,14 @@ class RenderingService:
                 x = int(bbox.get("x", 0)) + max(0, (int(bbox.get("width", 1)) - int(line_width)) // 2)
             else:
                 x = layout["start_x"]
-            draw.text((x, layout["start_y"] + index * line_height), line, font=layout["font"], fill=fill)
+            draw.text(
+                (x, layout["start_y"] + index * line_height),
+                line,
+                font=layout["font"],
+                fill=text_fill,
+                stroke_width=1,
+                stroke_fill=stroke_fill,
+            )
 
         return output
 
@@ -130,7 +146,7 @@ class RenderingService:
         self,
         image: str | Path | Image.Image,
         block: Any,
-        fill: tuple[int, int, int] = (0, 0, 0),
+        fill: tuple[int, int, int] | None = None,
     ) -> Image.Image:
         """Draw a legacy translation item or layout block dict."""
         normalized = self._normalize_render_block(block)
@@ -143,6 +159,30 @@ class RenderingService:
             fill=fill,
             block_type=normalized["block_type"],
         )
+
+    def sample_background_luminance(
+        self,
+        image: str | Path | Image.Image,
+        bbox: dict[str, Any],
+    ) -> float:
+        """Return average luminance for the target drawing area."""
+        loaded = self._load_image(image)
+        image_width, image_height = loaded.size
+        x1 = max(0, min(image_width, int(bbox.get("x", 0))))
+        y1 = max(0, min(image_height, int(bbox.get("y", 0))))
+        x2 = max(x1 + 1, min(image_width, x1 + max(1, int(bbox.get("width", 1)))))
+        y2 = max(y1 + 1, min(image_height, y1 + max(1, int(bbox.get("height", 1)))))
+        crop = loaded.crop((x1, y1, x2, y2)).convert("L")
+        return float(ImageStat.Stat(crop).mean[0])
+
+    def choose_text_color(
+        self,
+        image: str | Path | Image.Image,
+        bbox: dict[str, Any],
+    ) -> tuple[int, int, int]:
+        """Choose black or white text based on bbox background brightness."""
+        luminance = self.sample_background_luminance(image, bbox)
+        return (255, 255, 255) if luminance < 128 else (0, 0, 0)
 
     def export_debug_rendered(
         self,
@@ -181,6 +221,12 @@ class RenderingService:
         font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     ) -> float:
         return ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(text, font=font)
+
+    def _contrast_stroke_color(
+        self,
+        fill: tuple[int, int, int],
+    ) -> tuple[int, int, int]:
+        return (0, 0, 0) if fill == (255, 255, 255) else (255, 255, 255)
 
     def _candidate_font_paths(self) -> list[Path]:
         windows_fonts = Path("C:/Windows/Fonts")
@@ -263,6 +309,22 @@ class RenderingService:
             "start_x": start_x,
             "start_y": start_y,
         }
+
+    def _choose_short_text_layout(
+        self,
+        current: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        current_key = self._short_text_layout_rank(current)
+        candidate_key = self._short_text_layout_rank(candidate)
+        return candidate if candidate_key > current_key else current
+
+    def _short_text_layout_rank(self, layout: dict[str, Any]) -> tuple[int, int, int]:
+        return (
+            0 if layout["overflow"] else 1,
+            -len(layout["lines"]),
+            layout["font_size"],
+        )
 
     def _normalize_render_block(self, block: Any) -> dict[str, Any]:
         if not isinstance(block, dict):
