@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>本地图片翻译 mock MVP</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>本地图片翻译</h1>
+            <p>v0.1 mock 闭环</p>
+          </div>
+          <span class="badge">PNG / JPG / JPEG / WEBP</span>
+        </header>
+
+        <form id="uploadForm" class="upload-panel">
+          <label class="file-picker" for="imageInput">
+            <span>选择单张图片</span>
+            <input id="imageInput" name="file" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+          </label>
+          <button id="submitButton" type="submit">上传并生成 mock 结果</button>
+        </form>
+
+        <p id="message" class="message" role="status"></p>
+
+        <section class="preview-grid">
+          <article class="preview-pane">
+            <h2>原图预览</h2>
+            <div class="image-frame">
+              <img id="sourcePreview" alt="原图预览">
+              <span id="sourceEmpty">尚未选择图片</span>
+            </div>
+          </article>
+
+          <article class="preview-pane">
+            <h2>mock 输出图</h2>
+            <div class="image-frame">
+              <img id="outputPreview" alt="mock 输出图预览">
+              <span id="outputEmpty">上传后显示结果</span>
+            </div>
+            <a id="downloadLink" class="download-link" href="#" download hidden>下载 mock 输出图</a>
+          </article>
+        </section>
+
+        <section class="result-grid">
+          <article>
+            <h2>mock OCR 文本</h2>
+            <pre id="ocrText">等待上传图片</pre>
+          </article>
+          <article>
+            <h2>mock 翻译文本</h2>
+            <pre id="translationText">等待上传图片</pre>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/main.js"></script>
+  </body>
+</html>
