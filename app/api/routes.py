@@ -9,7 +9,7 @@ from app.services.file_service import (
     storage_url_for,
 )
 from app.services.image_render_service import create_mock_output_image
-from app.services.ocr_service import create_mock_ocr_result
+from app.services.ocr_service import create_ocr_result
 from app.services.translation_service import create_mock_translation_result
 
 router = APIRouter()
@@ -47,7 +47,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         output_dir=settings.output_dir,
         job_id=job_id,
     )
-    ocr_result = create_mock_ocr_result(job_id=job_id)
+    ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
     translation_result = create_mock_translation_result(
         job_id=job_id,
         ocr_result=ocr_result,
@@ -64,7 +64,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         "warnings": [
             {
                 "code": "MOCK_PIPELINE",
-                "message": "当前只复制原图作为 mock 输出图，未进行真实 OCR、翻译或重绘。",
+                "message": "当前仍使用 mock 翻译和 mock 输出图，未进行真实翻译、擦字或重绘。",
                 "stage": "render",
                 "level": "warning",
                 "detail": None,

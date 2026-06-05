@@ -1,5 +1,20 @@
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return float(value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -13,6 +28,14 @@ class Settings:
     debug_dir: Path = storage_dir / "debug"
     allowed_extensions: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp")
     max_upload_bytes: int = 10 * 1024 * 1024
+    ocr_engine: str = field(default_factory=lambda: os.getenv("OCR_ENGINE", "paddle"))
+    ocr_language: str = field(default_factory=lambda: os.getenv("OCR_LANGUAGE", "ch"))
+    ocr_min_confidence: float = field(
+        default_factory=lambda: _env_float("OCR_MIN_CONFIDENCE", 0.5)
+    )
+    ocr_fallback_to_mock: bool = field(
+        default_factory=lambda: _env_bool("OCR_FALLBACK_TO_MOCK", True)
+    )
 
 
 settings = Settings()
