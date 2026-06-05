@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services.file_service import (
     is_allowed_image,
@@ -58,11 +60,20 @@ class MockPipelineTests(unittest.TestCase):
             self.assertEqual(output_path.name, "job-456_mock_output.png")
 
     def test_mock_ocr_and_translation_share_block_ids(self):
-        ocr_result = create_mock_ocr_result(job_id="job-789")
-        translation_result = create_mock_translation_result(
-            job_id="job-789",
-            ocr_result=ocr_result,
+        mock_translation_settings = SimpleNamespace(
+            translation_provider="mock",
+            translation_target_language="zh-CN",
+            deepseek_api_key="",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_timeout_seconds=30,
         )
+        ocr_result = create_mock_ocr_result(job_id="job-789")
+        with patch("app.services.translation_service.settings", mock_translation_settings):
+            translation_result = create_mock_translation_result(
+                job_id="job-789",
+                ocr_result=ocr_result,
+            )
 
         self.assertEqual(ocr_result["job_id"], "job-789")
         self.assertEqual(ocr_result["blocks"][0]["id"], "block-1")

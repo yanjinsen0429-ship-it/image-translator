@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.core.config import settings
@@ -9,10 +11,12 @@ from app.services.file_service import (
     storage_url_for,
 )
 from app.services.image_render_service import create_mock_output_image
+from app.services.inpainting_service import InpaintingService
 from app.services.ocr_service import create_ocr_result
 from app.services.translation_service import create_translation_result
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -48,6 +52,16 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
+    try:
+        InpaintingService().export_debug_mask(
+            ocr_result=ocr_result,
+            image_path=input_path,
+            debug_mask_dir=settings.debug_dir / "mask",
+            image_id=job_id,
+        )
+    except Exception:
+        logger.exception("Failed to export debug OCR mask for job %s", job_id)
+
     translation_result = create_translation_result(
         job_id=job_id,
         ocr_result=ocr_result,

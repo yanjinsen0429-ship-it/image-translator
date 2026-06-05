@@ -142,8 +142,8 @@ class RouteCompatibilityTests(unittest.TestCase):
 
         fake_ocr_result = {
             "job_id": "job-route",
-            "image_width": None,
-            "image_height": None,
+            "image_width": 64,
+            "image_height": 48,
             "blocks": [
                 {
                     "id": "block-1",
@@ -170,6 +170,7 @@ class RouteCompatibilityTests(unittest.TestCase):
             fake_settings = SimpleNamespace(
                 upload_dir=root / "uploads",
                 output_dir=root / "outputs",
+                debug_dir=root / "debug",
                 storage_dir=root,
                 allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
                 max_upload_bytes=10 * 1024 * 1024,
@@ -190,6 +191,9 @@ class RouteCompatibilityTests(unittest.TestCase):
                 patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
             ):
                 result = asyncio.run(translate_image(FakeUpload()))
+                debug_mask_exists = (
+                    root / "debug" / "mask" / f"{result['job_id']}_mask.png"
+                ).exists()
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["ocr_result"]["blocks"][0]["text"], "Real OCR text")
@@ -202,6 +206,7 @@ class RouteCompatibilityTests(unittest.TestCase):
         self.assertIn("/storage/uploads/", result["input_file"])
         self.assertIn("/storage/outputs/", result["output_file"])
         self.assertEqual(result["download_url"], result["output_file"])
+        self.assertTrue(debug_mask_exists)
 
 
 if __name__ == "__main__":
