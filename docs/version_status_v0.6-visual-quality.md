@@ -895,3 +895,86 @@ OK
 - It does not change true rendering behavior.
 - It does not add overlay output.
 - It does not improve OCR, translation, mask, inpaint, render, frontend, manga layout, or logo skip.
+
+## Step 4D Render Fit Overlay Debug Only
+
+### Status
+
+Done
+
+### Goal
+
+- Add a visual render-fit debug overlay based on Step 4C render fit records.
+- Help inspect per-layout-block render risk at a glance, including missing region links, missing translation, overflow, underfilled boxes, small font, and vertical text hints.
+- Keep the feature debug-only and avoid changing OCR, translation, provider behavior, mask, inpaint, true render behavior, frontend, block classification, API response structure, or final output images.
+
+### Changes
+
+- Added render fit debug overlay export:
+
+```text
+storage/debug/layout/{job_id}_render_fit_overlay.png
+```
+
+- Added `export_render_fit_debug_overlay()` to `app/services/render_fit_service.py`.
+- The overlay draws each render fit record bbox over the source image.
+- Overlay labels are intentionally compact:
+
+```text
+b3 len=12 fs=18 links=1 notes=0
+```
+
+- Label fields include short block id, translated text length, selected font size, linked region count, and debug note count.
+- Overlay colors are based on debug notes:
+  - normal records use a green outline
+  - `no_linked_region` / `possible_vertical_text_region` use a blue outline
+  - `possible_underfilled_bbox` / `possible_font_too_small` use an orange outline
+  - `possible_overflow` / `no_translated_text` use a red outline
+- Route exports render fit JSON and overlay from the same render fit records.
+- No render fit overlay data is passed into mask, inpaint, render, response payloads, or final output decisions.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 116 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- Added coverage for render fit overlay generation, risk-summary drawing, empty-record overlay generation, and route-level `_render_fit_overlay.png` export.
+- Step 4C render fit JSON coverage remains active.
+- Step 4A / Step 4B coverage remains active.
+- Step 2 ignored/image processing protection remains covered.
+
+### Manual Check
+
+- Manually generated and opened web overlay:
+
+```text
+storage/debug/layout/manual_step4d_web_render_fit_overlay.png
+```
+
+- Manually generated and opened manga overlay:
+
+```text
+storage/debug/layout/manual_step4d_manga_render_fit_overlay.png
+```
+
+- Confirmed both overlays render bbox outlines and compact labels.
+- Confirmed risky records use visibly different outline colors.
+- Confirmed this manual check only opened debug overlay images and did not change final translated output.
+
+### Known Limits
+
+- This step is visual diagnosis only.
+- Overlay labels are summaries; full details remain in `_render_fit.json`.
+- It does not change true rendering behavior.
+- It does not improve OCR, translation, mask, inpaint, render, frontend, manga layout, or logo skip.

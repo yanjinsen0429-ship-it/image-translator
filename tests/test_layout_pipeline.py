@@ -354,8 +354,10 @@ class LayoutPipelineTests(unittest.TestCase):
         )
 
         render_fit_json_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
+        render_fit_overlay_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit_overlay.png"
 
         self.assertTrue(render_fit_json_path.exists())
+        self.assertTrue(render_fit_overlay_path.exists())
         data = json.loads(render_fit_json_path.read_text(encoding="utf-8"))
         self.assertEqual(data["job_id"], result["job_id"])
         self.assertEqual(data["record_count"], 1)
@@ -364,6 +366,8 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(record["linked_region_ids"], [])
         self.assertIn("no_linked_region", record["debug_notes"])
         self.assertGreater(record["translated_text_length"], 0)
+        with Image.open(render_fit_overlay_path) as overlay_image:
+            self.assertEqual(overlay_image.size, (8, 8))
 
     def test_pipeline_keeps_refined_noise_out_of_returned_translation_items(self) -> None:
         captured_render: dict = {}

@@ -395,6 +395,71 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertIn("no_linked_region", orphan["debug_notes"])
         self.assertIn("no_translated_text", orphan["debug_notes"])
 
+    def test_render_fit_debug_overlay_writes_risk_summary(self) -> None:
+        from app.services.render_fit_service import export_render_fit_debug_overlay
+
+        records = [
+            {
+                "block_id": "layout-block-3",
+                "bbox": [10, 10, 70, 40],
+                "translated_text_length": 12,
+                "selected_font_size": 18,
+                "linked_region_count": 1,
+                "debug_notes": [],
+            },
+            {
+                "block_id": "layout-block-4",
+                "bbox": [80, 10, 110, 32],
+                "translated_text_length": 0,
+                "selected_font_size": None,
+                "linked_region_count": 0,
+                "debug_notes": ["no_linked_region", "no_translated_text"],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            Image.new("RGB", (140, 80), "white").save(image_path)
+            output_path = root / "debug" / "layout" / "render_fit_overlay.png"
+
+            overlay_path = export_render_fit_debug_overlay(
+                image=image_path,
+                layout_blocks=[],
+                render_fit_records=records,
+                output_path=output_path,
+            )
+
+            with Image.open(overlay_path) as overlay_image:
+                overlay_size = overlay_image.size
+                changed_pixel = overlay_image.getpixel((10, 10))
+
+        self.assertEqual(overlay_path, output_path)
+        self.assertEqual(overlay_size, (140, 80))
+        self.assertNotEqual(changed_pixel, (255, 255, 255))
+
+    def test_render_fit_debug_overlay_handles_empty_records(self) -> None:
+        from app.services.render_fit_service import export_render_fit_debug_overlay
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            Image.new("RGB", (24, 16), "white").save(image_path)
+            output_path = root / "debug" / "layout" / "empty_render_fit_overlay.png"
+
+            overlay_path = export_render_fit_debug_overlay(
+                image=image_path,
+                layout_blocks=[],
+                render_fit_records=[],
+                output_path=output_path,
+            )
+
+            with Image.open(overlay_path) as overlay_image:
+                overlay_size = overlay_image.size
+
+        self.assertEqual(overlay_path, output_path)
+        self.assertEqual(overlay_size, (24, 16))
+
     def test_detects_white_bubble_candidate_from_synthetic_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             image_path = Path(tmp) / "bubble.png"

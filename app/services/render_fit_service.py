@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageDraw
+
 from app.services.rendering_service import RenderingService
 
 
@@ -13,10 +15,11 @@ def export_render_fit_debug_json(
     regions: list[Any],
     output_path: str | Path,
     job_id: str | None = None,
+    render_fit_records: list[dict[str, Any]] | None = None,
 ) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    records = build_render_fit_debug_records(
+    records = render_fit_records if render_fit_records is not None else build_render_fit_debug_records(
         layout_blocks=layout_blocks,
         translation_result=translation_result,
         regions=regions,
@@ -30,6 +33,30 @@ def export_render_fit_debug_json(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    return output_path
+
+
+def export_render_fit_debug_overlay(
+    image: str | Path | Image.Image,
+    layout_blocks: list[dict[str, Any]],
+    render_fit_records: list[dict[str, Any]],
+    output_path: str | Path,
+) -> Path:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with _open_overlay_image(image) as loaded_image:
+        overlay = loaded_image.convert("RGB")
+
+    draw = ImageDraw.Draw(overlay)
+    for index, record in enumerate(render_fit_records, start=1):
+        bbox = _record_bbox(record, layout_blocks)
+        color = _overlay_color(record)
+        label = _overlay_label(record, index)
+        x1, y1, x2, y2 = bbox
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=2)
+        draw.text((x1, max(0, y1 - 12)), label, fill=color)
+
+    overlay.save(output_path)
     return output_path
 
 
@@ -286,3 +313,52 @@ def _overlap_ratio(bbox_a: tuple[float, float, float, float], bbox_b: tuple[floa
 
 def _normalize_bbox(bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     return tuple(int(value) if float(value).is_integer() else float(value) for value in bbox)  # type: ignore[return-value]
+
+
+def _open_overlay_image(image: str | Path | Image.Image) -> Image.Image:
+    if isinstance(image, Image.Image):
+        return image.copy()
+    return Image.open(image)
+
+
+def _record_bbox(
+    record: dict[str, Any],
+    layout_blocks: list[dict[str, Any]],
+) -> tuple[int, int, int, int]:
+    bbox = record.get("bbox")
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return tuple(round(float(value)) for value in bbox[:4])  # type: ignore[return-value]
+
+    block_id = record.get("block_id")
+    for block in layout_blocks:
+        if block.get("id") == block_id:
+            return tuple(round(float(value)) for value in _block_bbox(block))  # type: ignore[return-value]
+    return (0, 0, 0, 0)
+
+
+def _overlay_color(record: dict[str, Any]) -> tuple[int, int, int]:
+    notes = set(record.get("debug_notes") or [])
+    if "possible_overflow" in notes or "no_translated_text" in notes:
+        return (220, 20, 60)
+    if "possible_font_too_small" in notes or "possible_underfilled_bbox" in notes:
+        return (255, 140, 0)
+    if "no_linked_region" in notes or "possible_vertical_text_region" in notes:
+        return (80, 120, 255)
+    return (20, 160, 80)
+
+
+def _overlay_label(record: dict[str, Any], index: int) -> str:
+    block_id = _short_block_id(str(record.get("block_id") or f"b{index}"), index)
+    translated_length = int(record.get("translated_text_length") or 0)
+    font_size = record.get("selected_font_size")
+    font_label = "na" if font_size is None else str(font_size)
+    linked_count = int(record.get("linked_region_count") or len(record.get("linked_region_ids") or []))
+    notes_count = len(record.get("debug_notes") or [])
+    return f"{block_id} len={translated_length} fs={font_label} links={linked_count} notes={notes_count}"
+
+
+def _short_block_id(block_id: str, index: int) -> str:
+    tail = block_id.replace("layout_block-", "b").replace("layout_", "")
+    if len(tail) <= 8:
+        return tail
+    return f"b{index}"
