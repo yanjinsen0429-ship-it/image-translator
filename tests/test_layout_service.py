@@ -97,8 +97,18 @@ class LayoutServiceTests(unittest.TestCase):
 
         self.assertEqual(classify_block(block), "ignored")
 
+    def test_standalone_closing_bracket_with_large_bbox_is_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("]", (120, 200, 190, 300), "noise"), index=0)
+
+        self.assertEqual(classify_block(block), "ignored")
+
     def test_standalone_vertical_bar_is_marked_as_ignored(self) -> None:
         block = normalize_ocr_block(make_block("|", (42, 60, 48, 78), "noise"), index=0)
+
+        self.assertEqual(classify_block(block), "ignored")
+
+    def test_standalone_vertical_bar_with_large_bbox_is_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("|", (120, 200, 185, 310), "noise"), index=0)
 
         self.assertEqual(classify_block(block), "ignored")
 
@@ -107,8 +117,31 @@ class LayoutServiceTests(unittest.TestCase):
 
         self.assertEqual(classify_block(block), "ignored")
 
+    def test_large_isolated_single_letter_noise_is_marked_as_ignored(self) -> None:
+        for text in ("E", "I", "l"):
+            with self.subTest(text=text):
+                layout_blocks = merge_ocr_blocks(
+                    [make_block(text, (120, 200, 190, 300), "noise", confidence=0.42)]
+                )
+
+                self.assertEqual(len(layout_blocks), 1)
+                self.assertEqual(layout_blocks[0].text, text)
+                self.assertEqual(layout_blocks[0].block_type, "ignored")
+
+    def test_single_letter_near_text_group_is_not_marked_as_ignored(self) -> None:
+        layout_blocks = merge_ocr_blocks(
+            [
+                make_block("I", (20, 20, 60, 44), "i"),
+                make_block("am here", (22, 48, 120, 72), "text"),
+            ]
+        )
+
+        self.assertEqual(len(layout_blocks), 1)
+        self.assertEqual(layout_blocks[0].text, "I am here")
+        self.assertEqual(layout_blocks[0].block_type, "paragraph")
+
     def test_short_button_like_text_is_not_marked_as_ignored(self) -> None:
-        for text in ("OK", "Go", "No", "Yes"):
+        for text in ("OK", "Go", "No", "Yes", "AI", "A", "B", "C", "1", "2", "3"):
             with self.subTest(text=text):
                 block = normalize_ocr_block(make_block(text, (20, 20, 70, 44), text), index=0)
 

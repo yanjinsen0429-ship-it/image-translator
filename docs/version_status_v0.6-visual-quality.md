@@ -269,3 +269,71 @@ Manual character-image overlay inspection is the next step:
 - This step does not change inpaint behavior.
 - This step does not change render behavior.
 - A later Step 2C-1 should be designed from the overlay evidence.
+
+## Step 2A.1 Improve OCR Noise Marking for Large False Positive Blocks
+
+### Status
+
+Done
+
+### Goal
+
+- Improve OCR noise marking for obvious large false-positive layout blocks.
+- Mark isolated large `]`, `|`, `E`, `I`, and `l` OCR artifacts as `ignored` when the signal is conservative enough.
+- Preserve real short text and paragraph merge behavior.
+- Do not change final image output, mask generation, inpainting, rendering, routes, OCR providers, or frontend behavior.
+
+### Changes
+
+- Kept standalone punctuation noise marking for obvious symbols such as `]` and `|`.
+- Added a layout refinement pass after initial block classification.
+- Marked isolated single-letter `E` / `I` / `l` blocks as `ignored` when low confidence or using an oversized single-character bbox.
+- Avoided ignoring single-letter blocks when they have nearby normal text that can form a paragraph.
+- Preserved Step 1 `Abuse` + `report` => `Abuse report` button merge behavior.
+- Preserved existing paragraph merge behavior.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 92 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+Step-specific coverage:
+
+- Large isolated `]` is marked as `ignored`.
+- Large isolated `|` is marked as `ignored`.
+- Large isolated `E`, `I`, and `l` are marked as `ignored`.
+- Normal short text such as `OK`, `Go`, `No`, `Yes`, `AI`, `A`, `B`, `C`, `1`, `2`, and `3` is preserved.
+- A single-letter block near paragraph text is not marked as `ignored`.
+- Button Horizontal Merge and paragraph merge regressions are covered.
+
+### Manual Check
+
+Manual character-image retest was not run in this step.
+
+Recommended retest checklist:
+
+- Confirm translation results no longer include skirt / shoe noise such as standalone `]` or `E` sent to DeepSeek.
+- Confirm the debug overlay marks those suspicious skirt / shoe OCR blocks as `ignored`.
+- Confirm final output damage improves after the later image-processing connection step.
+
+### Known Limits
+
+- This remains a conservative layout-layer heuristic.
+- Complete-word false positives may still pass through.
+- This step does not connect ignored blocks to mask, inpaint, or render behavior.
+- Logo / brand skip is not expanded in this step.
+- Bubble detection is not implemented in this step.
+- Visual polish is not implemented in this step.

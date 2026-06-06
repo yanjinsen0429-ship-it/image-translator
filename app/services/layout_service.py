@@ -124,6 +124,7 @@ def merge_ocr_blocks(
         }
         for block in normalized
     ]
+    typed_blocks = refine_noise_blocks(typed_blocks)
     typed_blocks.sort(key=lambda block: (block["bbox"][1], block["bbox"][0]))
 
     layout_blocks: list[LayoutBlock] = []
@@ -163,6 +164,16 @@ def merge_ocr_blocks(
 
     flush_group()
     return layout_blocks
+
+
+def refine_noise_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refined: list[dict[str, Any]] = []
+    for block in blocks:
+        if _is_isolated_single_letter_noise(block, blocks):
+            refined.append({**block, "block_type": "ignored"})
+        else:
+            refined.append(block)
+    return refined
 
 
 def export_layout_debug_overlay(
@@ -281,6 +292,47 @@ def _average_confidence(group: list[dict[str, Any]]) -> float | None:
     if not values:
         return None
     return sum(float(value) for value in values) / len(values)
+
+
+def _is_isolated_single_letter_noise(
+    block: dict[str, Any],
+    blocks: list[dict[str, Any]],
+) -> bool:
+    text = str(block.get("text") or "").strip()
+    if block.get("block_type") != "normal" or text not in {"E", "I", "l"}:
+        return False
+
+    has_nearby_text = any(
+        other is not block
+        and other.get("block_type") == "normal"
+        and _is_text_neighbor(block, other)
+        for other in blocks
+    )
+    if has_nearby_text:
+        return False
+
+    confidence = block.get("confidence")
+    if confidence is not None and float(confidence) <= 0.65:
+        return True
+
+    return _is_oversized_single_character_bbox(block)
+
+
+def _is_text_neighbor(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
+    bbox_a = block_a["bbox"]
+    bbox_b = block_b["bbox"]
+    max_height = max(bbox_height(bbox_a), bbox_height(bbox_b))
+    return (
+        vertical_gap(bbox_a, bbox_b) <= max_height * 1.2
+        and horizontal_overlap_ratio(bbox_a, bbox_b) >= 0.25
+    )
+
+
+def _is_oversized_single_character_bbox(block: dict[str, Any]) -> bool:
+    bbox = block["bbox"]
+    width = bbox_width(bbox)
+    height = bbox_height(bbox)
+    return width >= 24 or height >= 36
 
 
 def _render_geometry(block: dict[str, Any]) -> list[tuple[int, int]] | None:
