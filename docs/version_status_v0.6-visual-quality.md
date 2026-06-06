@@ -669,3 +669,80 @@ Recommended retest checklist:
 - This step does not expand logo / brand skip.
 - This step does not implement bubble detection.
 - This step does not implement visual polish.
+
+## Step 4A Text Box / Bubble Candidate Detection Debug Only
+
+### Status
+
+Done
+
+### Goal
+
+- Add lightweight candidate detection for comic bubbles, caption boxes, text boxes, and button-like text containers.
+- Produce debug-only artifacts that help inspect where future OCR / mask / render improvements could use container regions.
+- Do not change OCR results, translation input, mask generation, inpainting, rendering, or the final output image.
+
+### Changes
+
+- Added `app/services/region_service.py`.
+- Added a `TextRegion` debug structure with `id`, `region_type`, `bbox`, `polygon`, `score`, `source`, `linked_block_ids`, and `notes`.
+- Added heuristic bright-region detection for bubble candidates.
+- Added heuristic dark-region detection for caption/text box candidates.
+- Added debug-only `button_like` regions derived from existing button layout blocks.
+- Linked detected regions to layout blocks when a block center is inside the region bbox or when bbox overlap is high enough.
+- Added region debug overlay export:
+
+```text
+storage/debug/layout/{job_id}_region_overlay.png
+```
+
+- Added region debug JSON export:
+
+```text
+storage/debug/layout/{job_id}_regions.json
+```
+
+- Wired route-level debug export after layout debug output.
+- The detected regions are not passed into OCR, translation, mask, inpaint, render, or response item generation.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 108 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- Region-specific coverage includes synthetic white bubble detection, dark caption/text box detection, debug JSON export, debug overlay export, layout block linking, empty-region JSON export, button-like region export, and route-level debug artifact export.
+- Existing regression coverage remains active for Abuse + report button merge, OCR noise ignored blocks, ignored blocks skipped in image processing, and paragraph merge.
+
+### Manual Check
+
+- Checked a web screenshot region overlay.
+  - Output: `storage/debug/layout/manual_web_step4a_region_overlay.png`
+  - JSON: `storage/debug/layout/manual_web_step4a_regions.json`
+  - Result: detected one `button_like` region around the Abuse report button linked to `layout_block-6_block-7`.
+- Checked a manga / illustration region overlay.
+  - Output: `storage/debug/layout/manual_manga_step4a_region_overlay.png`
+  - JSON: `storage/debug/layout/manual_manga_step4a_regions.json`
+  - Result: detected 14 candidate regions, mostly `bubble`, with several linked to OCR/layout blocks.
+- Final output image quality was not expected to change in this step because region detection is debug-only.
+
+### Known Limits
+
+- Current detection is heuristic candidate detection only.
+- It does not guarantee detection of every bubble or text box.
+- False positives are possible, especially on large bright or dark visual areas.
+- It does not handle vertical Japanese OCR.
+- It does not change final translated images.
+- It does not handle logo skip.
+- It does not perform manga layout.
+- Step 4B / Step 5 may later use these regions for actual OCR, mask, or render improvements.

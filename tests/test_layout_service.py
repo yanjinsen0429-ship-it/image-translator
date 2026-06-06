@@ -4,12 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
 from app.services.layout_service import (
     LayoutBlock,
     classify_block,
     export_layout_debug_json,
     merge_ocr_blocks,
     normalize_ocr_block,
+)
+from app.services.region_service import (
+    detect_text_regions,
+    export_region_debug_json,
+    export_region_debug_overlay,
 )
 
 
@@ -248,6 +255,122 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertEqual(ignored["block_type"], "ignored")
         self.assertTrue(ignored["is_ignored"])
         self.assertFalse(ignored["enters_translation"])
+
+    def test_detects_white_bubble_candidate_from_synthetic_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "bubble.png"
+            image = Image.new("RGB", (160, 120), (120, 120, 120))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((30, 25, 130, 90), fill="white", outline="black", width=3)
+            image.save(image_path)
+
+            regions = detect_text_regions(image_path=image_path, layout_blocks=[])
+
+        self.assertTrue(any(region.region_type == "bubble" for region in regions))
+        bubble = next(region for region in regions if region.region_type == "bubble")
+        self.assertGreaterEqual(bubble.bbox[0], 25)
+        self.assertLessEqual(bubble.bbox[2], 135)
+        self.assertGreater(bubble.score, 0)
+
+    def test_detects_dark_caption_box_candidate_from_synthetic_image(self) -> None:
+        blocks = [
+            {
+                "id": "layout-caption",
+                "text": "Caption",
+                "bbox": {"x": 52, "y": 42, "width": 50, "height": 16},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "caption.png"
+            image = Image.new("RGB", (160, 100), "white")
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((35, 25, 125, 75), fill="black")
+            image.save(image_path)
+
+            regions = detect_text_regions(image_path=image_path, layout_blocks=blocks)
+
+        self.assertTrue(any(region.region_type in {"caption_box", "text_box"} for region in regions))
+        caption = next(region for region in regions if region.region_type in {"caption_box", "text_box"})
+        self.assertIn("layout-caption", caption.linked_block_ids)
+        self.assertIn("dark", " ".join(caption.notes))
+
+    def test_creates_button_like_region_from_button_layout_block(self) -> None:
+        blocks = [
+            {
+                "id": "layout-button",
+                "text": "Abuse report",
+                "block_type": "button",
+                "bbox": {"x": 40, "y": 50, "width": 90, "height": 24},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "button.png"
+            Image.new("RGB", (180, 120), (35, 35, 55)).save(image_path)
+
+            regions = detect_text_regions(image_path=image_path, layout_blocks=blocks)
+
+        self.assertTrue(any(region.region_type == "button_like" for region in regions))
+        button_region = next(region for region in regions if region.region_type == "button_like")
+        self.assertIn("layout-button", button_region.linked_block_ids)
+        self.assertIn("layout button", " ".join(button_region.notes))
+
+    def test_region_debug_json_and_overlay_are_written(self) -> None:
+        blocks = [
+            {
+                "id": "layout-block",
+                "text": "Hello",
+                "bbox": {"x": 42, "y": 34, "width": 40, "height": 14},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "bubble.png"
+            image = Image.new("RGB", (140, 100), (130, 130, 130))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((25, 20, 115, 80), fill="white", outline="black", width=3)
+            image.save(image_path)
+            regions = detect_text_regions(image_path=image_path, layout_blocks=blocks)
+
+            json_path = export_region_debug_json(
+                regions=regions,
+                output_path=root / "debug" / "layout" / "job_regions.json",
+                job_id="job",
+            )
+            overlay_path = export_region_debug_overlay(
+                image_path=image_path,
+                regions=regions,
+                debug_layout_dir=root / "debug" / "layout",
+                image_id="job",
+            )
+
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            with Image.open(overlay_path) as overlay_image:
+                overlay_size = overlay_image.size
+
+        self.assertEqual(data["job_id"], "job")
+        self.assertEqual(data["region_count"], len(data["regions"]))
+        self.assertGreaterEqual(data["region_count"], 1)
+        self.assertIn("linked_block_ids", data["regions"][0])
+        self.assertEqual(overlay_size, (140, 100))
+
+    def test_region_debug_json_writes_empty_list_for_plain_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "plain.png"
+            Image.new("RGB", (120, 80), (128, 128, 128)).save(image_path)
+            regions = detect_text_regions(image_path=image_path, layout_blocks=[])
+
+            json_path = export_region_debug_json(
+                regions=regions,
+                output_path=root / "debug" / "layout" / "plain_regions.json",
+                job_id="plain",
+            )
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(regions, [])
+        self.assertEqual(data["job_id"], "plain")
+        self.assertEqual(data["region_count"], 0)
+        self.assertEqual(data["regions"], [])
 
     def test_merged_bbox_covers_source_blocks(self) -> None:
         blocks = [

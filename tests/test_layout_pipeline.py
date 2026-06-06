@@ -242,6 +242,28 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(data["blocks"][0]["text"], "Hello World")
         self.assertIn("enters_translation", data["blocks"][0])
 
+    def test_pipeline_exports_region_debug_json_and_overlay(self) -> None:
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        result, root = self._run_route_with_valid_image(
+            fake_ocr_result=self._make_single_block_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=self._fake_debug_rendered,
+        )
+
+        json_path = root / "debug" / "layout" / f"{result['job_id']}_regions.json"
+        overlay_path = root / "debug" / "layout" / f"{result['job_id']}_region_overlay.png"
+
+        self.assertTrue(json_path.exists())
+        self.assertTrue(overlay_path.exists())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["job_id"], result["job_id"])
+        self.assertIn("region_count", data)
+        self.assertIn("regions", data)
+        with Image.open(overlay_path) as overlay_image:
+            self.assertEqual(overlay_image.size, (8, 8))
+
     def test_pipeline_keeps_refined_noise_out_of_returned_translation_items(self) -> None:
         captured_render: dict = {}
 

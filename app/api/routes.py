@@ -22,6 +22,11 @@ from app.services.layout_service import (
 )
 from app.services.ocr_service import create_ocr_result
 from app.services.rendering_service import RenderingService
+from app.services.region_service import (
+    detect_text_regions,
+    export_region_debug_json,
+    export_region_debug_overlay,
+)
 from app.services.translation_service import create_translation_result
 
 router = APIRouter()
@@ -79,6 +84,24 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         )
     except Exception:
         logger.exception("Failed to export debug layout JSON for job %s", job_id)
+    try:
+        regions = detect_text_regions(
+            image_path=input_path,
+            layout_blocks=translation_input.get("blocks", []),
+        )
+        export_region_debug_overlay(
+            image_path=input_path,
+            regions=regions,
+            debug_layout_dir=settings.debug_dir / "layout",
+            image_id=job_id,
+        )
+        export_region_debug_json(
+            regions=regions,
+            output_path=settings.debug_dir / "layout" / f"{job_id}_regions.json",
+            job_id=job_id,
+        )
+    except Exception:
+        logger.exception("Failed to export debug text regions for job %s", job_id)
 
     inpainted_path = None
     try:
