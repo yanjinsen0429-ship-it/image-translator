@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
+
+from PIL import Image, ImageDraw
 
 from app.utils.geometry import (
     BBox,
@@ -162,6 +165,40 @@ def merge_ocr_blocks(
     return layout_blocks
 
 
+def export_layout_debug_overlay(
+    image_path: str | Path,
+    blocks: list[dict[str, Any]],
+    debug_layout_dir: Path,
+    image_id: str,
+) -> Path:
+    debug_layout_dir.mkdir(parents=True, exist_ok=True)
+    output_path = debug_layout_dir / f"{image_id}_layout_overlay.png"
+
+    with Image.open(image_path) as image:
+        overlay = image.convert("RGB")
+
+    draw = ImageDraw.Draw(overlay)
+    for index, block in enumerate(blocks, start=1):
+        geometry = _render_geometry(block)
+        if geometry is None:
+            continue
+
+        color = _overlay_color(block)
+        label = _overlay_label(index, block)
+        if len(geometry) >= 3:
+            draw.line([*geometry, geometry[0]], fill=color, width=2)
+            label_x, label_y = geometry[0]
+        else:
+            x1, y1 = geometry[0]
+            x2, y2 = geometry[1]
+            draw.rectangle((x1, y1, x2, y2), outline=color, width=2)
+            label_x, label_y = x1, y1
+        draw.text((label_x, max(0, label_y - 12)), label, fill=color)
+
+    overlay.save(output_path)
+    return output_path
+
+
 def _should_merge(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
     bbox_a = block_a["bbox"]
     bbox_b = block_b["bbox"]
@@ -244,6 +281,48 @@ def _average_confidence(group: list[dict[str, Any]]) -> float | None:
     if not values:
         return None
     return sum(float(value) for value in values) / len(values)
+
+
+def _render_geometry(block: dict[str, Any]) -> list[tuple[int, int]] | None:
+    polygon = block.get("polygon")
+    bbox = block.get("bbox")
+    if not polygon and isinstance(bbox, dict):
+        polygon = bbox.get("points")
+    if polygon:
+        points = []
+        for point in polygon:
+            if not isinstance(point, list | tuple) or len(point) < 2:
+                return None
+            points.append((round(float(point[0])), round(float(point[1]))))
+        if len(points) >= 3:
+            return points
+
+    if isinstance(bbox, dict) and {"x", "y", "width", "height"}.issubset(bbox):
+        x1 = round(float(bbox["x"]))
+        y1 = round(float(bbox["y"]))
+        x2 = x1 + round(float(bbox["width"]))
+        y2 = y1 + round(float(bbox["height"]))
+        return [(x1, y1), (x2, y2)]
+    if isinstance(bbox, tuple | list) and len(bbox) >= 4:
+        return [
+            (round(float(bbox[0])), round(float(bbox[1]))),
+            (round(float(bbox[2])), round(float(bbox[3]))),
+        ]
+    return None
+
+
+def _overlay_color(block: dict[str, Any]) -> tuple[int, int, int]:
+    if block.get("block_type") == "ignored":
+        return (220, 20, 60)
+    return (20, 140, 40)
+
+
+def _overlay_label(index: int, block: dict[str, Any]) -> str:
+    block_type = str(block.get("block_type") or "normal")
+    text = str(block.get("text") or "").replace("\n", " ").strip()
+    if len(text) > 24:
+        text = f"{text[:24]}..."
+    return f"#{index} {block_type}: {text}"
 
 
 def _extract_polygon(block: dict[str, Any]) -> list[list[float]] | None:

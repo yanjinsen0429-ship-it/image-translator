@@ -1,5 +1,6 @@
 import asyncio
 import io
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from app.api.routes import translate_image
+from app.services.layout_service import export_layout_debug_overlay
 from app.services.translation_service import MockTranslationProvider
 
 
@@ -142,6 +144,83 @@ class LayoutPipelineTests(unittest.TestCase):
         with Image.open(output_path) as output_image:
             self.assertNotEqual(output_image.getpixel((0, 0)), (255, 255, 255))
             self.assertEqual(output_image.getpixel((0, 0)), rendered_pixel)
+
+    def test_export_layout_debug_overlay_saves_overlay_image(self) -> None:
+        blocks = [
+            {
+                "id": "layout-normal",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 2, "y": 2, "width": 12, "height": 8, "points": [[2, 2], [14, 2], [14, 10], [2, 10]]},
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            Image.new("RGB", (32, 16), "white").save(image_path)
+
+            overlay_path = export_layout_debug_overlay(
+                image_path=image_path,
+                blocks=blocks,
+                debug_layout_dir=root / "debug" / "layout",
+                image_id="image-123",
+            )
+
+            self.assertEqual(overlay_path, root / "debug" / "layout" / "image-123_layout_overlay.png")
+            self.assertTrue(overlay_path.exists())
+            with Image.open(overlay_path) as overlay_image:
+                self.assertEqual(overlay_image.size, (32, 16))
+
+    def test_export_layout_debug_overlay_handles_normal_and_ignored_without_mutation(self) -> None:
+        blocks = [
+            {
+                "id": "layout-normal",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 2, "y": 2, "width": 12, "height": 8, "points": [[2, 2], [14, 2], [14, 10], [2, 10]]},
+            },
+            {
+                "id": "layout-ignored",
+                "text": "]",
+                "block_type": "ignored",
+                "bbox": {"x": 20, "y": 2, "width": 6, "height": 8, "points": [[20, 2], [26, 2], [26, 10], [20, 10]]},
+            },
+        ]
+        original_blocks = copy.deepcopy(blocks)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            Image.new("RGB", (32, 16), "white").save(image_path)
+
+            overlay_path = export_layout_debug_overlay(
+                image_path=image_path,
+                blocks=blocks,
+                debug_layout_dir=root / "debug" / "layout",
+                image_id="image-123",
+            )
+
+            self.assertTrue(overlay_path.exists())
+
+        self.assertEqual(blocks, original_blocks)
+        self.assertEqual(blocks[1]["block_type"], "ignored")
+
+    def test_pipeline_exports_layout_debug_overlay(self) -> None:
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        result, root = self._run_route_with_valid_image(
+            fake_ocr_result=self._make_single_block_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=self._fake_debug_rendered,
+        )
+
+        overlay_path = root / "debug" / "layout" / f"{result['job_id']}_layout_overlay.png"
+
+        self.assertTrue(overlay_path.exists())
+        with Image.open(overlay_path) as overlay_image:
+            self.assertEqual(overlay_image.size, (8, 8))
 
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
@@ -277,6 +356,18 @@ class LayoutPipelineTests(unittest.TestCase):
             "raw": {"mode": "test"},
             "warnings": [],
         }
+
+    def _fake_debug_rendered(
+        self,
+        image_path: Path,
+        translation_items: list[dict],
+        debug_rendered_dir: Path,
+        image_id: str,
+    ) -> Path:
+        debug_rendered_dir.mkdir(parents=True, exist_ok=True)
+        rendered_path = debug_rendered_dir / f"{image_id}_rendered.png"
+        Image.new("RGB", (8, 8), (12, 34, 56)).save(rendered_path)
+        return rendered_path
 
     def _make_translation_result(self, job_id: str, ocr_result: dict) -> dict:
         items = [

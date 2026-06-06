@@ -199,3 +199,73 @@ OK
 - Logo / brand skip is not expanded in this step.
 - Bubble detection is not implemented in this step.
 - Concise translation mode is not implemented in this step.
+
+## Step 2C-0 Debug Mask / Block Overlay
+
+### Status
+
+Done
+
+### Goal
+
+- Add a diagnostic overlay for OCR/layout blocks before attempting another image-processing fix.
+- Help identify which OCR/layout block covers non-text regions such as skirt, legs, shoes, clothing folds, or background lines.
+- Show block geometry, text, `block_type`, and whether the block is `ignored`.
+- Do not change mask, inpaint, render, OCR, translation, or frontend behavior.
+
+### Changes
+
+- Added `export_layout_debug_overlay` in `layout_service`.
+- Added route-level export of layout overlay images after layout merge.
+- Output path:
+
+```text
+storage/debug/layout/{job_id}_layout_overlay.png
+```
+
+- The overlay draws each layout block bbox / polygon and labels it as:
+
+```text
+#index block_type: text preview
+```
+
+- `ignored` blocks use a distinct color from processable blocks.
+- The overlay function does not mutate source block dictionaries or change `block_type`.
+- Final output image processing remains unchanged.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 88 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+### Manual Check
+
+Manual character-image overlay inspection is the next step:
+
+- Check which block covers the skirt region.
+- Check which block covers the shoes region.
+- Check which block covers the leg region.
+- Record each suspicious block's text and `block_type`.
+- Confirm whether suspicious blocks are `ignored` or still processable.
+
+### Known Limits
+
+- This step is diagnostic only.
+- This step does not directly fix final image false-positive damage.
+- This step does not change mask generation.
+- This step does not change inpaint behavior.
+- This step does not change render behavior.
+- A later Step 2C-1 should be designed from the overlay evidence.
