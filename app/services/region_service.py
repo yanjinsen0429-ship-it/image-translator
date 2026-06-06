@@ -133,7 +133,7 @@ def export_region_debug_overlay(
         color = _region_color(region.region_type)
         x1, y1, x2, y2 = region.bbox
         draw.rectangle((x1, y1, x2, y2), outline=color, width=2)
-        label = f"{region.id} {region.region_type} {region.score:.2f} links:{len(region.linked_block_ids)}"
+        label = f"{region.id} {region.region_type} {region.score:.2f} links={len(region.linked_block_ids)}"
         draw.text((x1, max(0, y1 - 12)), label, fill=color)
 
     overlay.save(output_path)
@@ -233,7 +233,11 @@ def _linked_block_ids(region_bbox: BBox, layout_blocks: list[dict[str, Any]]) ->
         if block_bbox is None:
             continue
         center = bbox_center(block_bbox)
-        if _point_inside_bbox(center, region_bbox) or _overlap_ratio(block_bbox, region_bbox) >= 0.25:
+        if (
+            _bbox_contains(region_bbox, block_bbox)
+            or _point_inside_bbox(center, region_bbox)
+            or _overlap_ratio(block_bbox, region_bbox) >= 0.25
+        ):
             block_id = block.get("id")
             if block_id is not None:
                 linked.append(str(block_id))
@@ -257,6 +261,15 @@ def _block_bbox(block: dict[str, Any]) -> BBox | None:
 
 def _point_inside_bbox(point: tuple[float, float], bbox: BBox) -> bool:
     return float(bbox[0]) <= point[0] <= float(bbox[2]) and float(bbox[1]) <= point[1] <= float(bbox[3])
+
+
+def _bbox_contains(container: BBox, inner: BBox) -> bool:
+    return (
+        float(container[0]) <= float(inner[0])
+        and float(container[1]) <= float(inner[1])
+        and float(container[2]) >= float(inner[2])
+        and float(container[3]) >= float(inner[3])
+    )
 
 
 def _overlap_ratio(bbox_a: BBox, bbox_b: BBox) -> float:

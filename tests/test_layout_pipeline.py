@@ -264,6 +264,77 @@ class LayoutPipelineTests(unittest.TestCase):
         with Image.open(overlay_path) as overlay_image:
             self.assertEqual(overlay_image.size, (8, 8))
 
+    def test_pipeline_layout_debug_json_links_detected_regions(self) -> None:
+        class FakeUpload:
+            filename = "sample.png"
+
+            async def read(self):
+                buffer = io.BytesIO()
+                image = Image.new("RGB", (120, 80), (120, 120, 120))
+                for x in range(20, 100):
+                    for y in range(20, 60):
+                        image.putpixel((x, y), (255, 255, 255))
+                image.save(buffer, format="PNG")
+                return buffer.getvalue()
+
+        fake_ocr_result = {
+            "job_id": "job-layout",
+            "image_width": 120,
+            "image_height": 80,
+            "blocks": [
+                self._make_ocr_block(
+                    block_id="bubble-text",
+                    text="Hello",
+                    bbox=(42, 34, 82, 48),
+                )
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
+        }
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        root_path = Path(tempfile.mkdtemp())
+        fake_settings = SimpleNamespace(
+            upload_dir=root_path / "uploads",
+            output_dir=root_path / "outputs",
+            debug_dir=root_path / "debug",
+            storage_dir=root_path,
+            allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
+            max_upload_bytes=10 * 1024 * 1024,
+        )
+        mask_path = root_path / "debug" / "mask" / "test_mask.png"
+        inpainted_path = root_path / "debug" / "inpainted" / "test_inpainted.png"
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        inpainted_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("L", (120, 80), 255).save(mask_path)
+        Image.new("RGB", (120, 80), (200, 200, 200)).save(inpainted_path)
+
+        with (
+            patch("app.api.routes.settings", fake_settings),
+            patch("app.services.file_service.settings", fake_settings),
+            patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
+            patch("app.api.routes.create_translation_result", side_effect=fake_translation_result),
+            patch("app.api.routes.InpaintingService.export_debug_mask", return_value=mask_path),
+            patch("app.api.routes.InpaintingService.export_debug_inpainted", return_value=inpainted_path),
+            patch("app.api.routes.RenderingService.export_debug_rendered", side_effect=self._fake_debug_rendered),
+        ):
+            result = asyncio.run(translate_image(FakeUpload()))
+
+        layout_json_path = root_path / "debug" / "layout" / f"{result['job_id']}_layout_blocks.json"
+        regions_json_path = root_path / "debug" / "layout" / f"{result['job_id']}_regions.json"
+        layout_data = json.loads(layout_json_path.read_text(encoding="utf-8"))
+        regions_data = json.loads(regions_json_path.read_text(encoding="utf-8"))
+        layout_block = layout_data["blocks"][0]
+        linked_region_id = layout_block["linked_region_ids"][0]
+        linked_region = next(region for region in regions_data["regions"] if region["id"] == linked_region_id)
+
+        self.assertEqual(layout_block["text"], "Hello")
+        self.assertEqual(layout_block["linked_region_ids"], [linked_region["id"]])
+        self.assertIn(layout_block["id"], linked_region["linked_block_ids"])
+        self.assertEqual(linked_region["region_type"], "bubble")
+
     def test_pipeline_keeps_refined_noise_out_of_returned_translation_items(self) -> None:
         captured_render: dict = {}
 

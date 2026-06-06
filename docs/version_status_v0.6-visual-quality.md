@@ -746,3 +746,70 @@ OK
 - It does not handle logo skip.
 - It does not perform manga layout.
 - Step 4B / Step 5 may later use these regions for actual OCR, mask, or render improvements.
+
+## Step 4B Link Layout Blocks with Text Regions Debug Only
+
+### Status
+
+Done
+
+### Goal
+
+- Add bidirectional debug links between layout blocks and Step 4A text region candidates.
+- Make it easier to inspect whether OCR/layout text sits inside a detected bubble, caption box, text box, or button-like container.
+- Keep the feature debug-only and avoid changing OCR, translation, mask, inpaint, render, frontend, block classification, or final output images.
+
+### Changes
+
+- Kept `linked_block_ids` in `storage/debug/layout/{job_id}_regions.json`.
+- Added `linked_region_ids` to each block record in `storage/debug/layout/{job_id}_layout_blocks.json`.
+- Added bbox containment as an explicit region-to-block link condition.
+- Preserved the Step 4A center-inside-region and overlap-based linking behavior.
+- Allowed one block to link to multiple regions and one region to link to multiple blocks.
+- Added `no_linked_text_region` to layout debug notes when a block has no linked region.
+- Changed region overlay labels to include linked block count as `links={count}`.
+- Reordered route-level debug export so region candidates are detected before layout JSON serialization.
+- The detected regions and links are not passed into translation, mask, inpaint, render, or response item generation.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 112 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- Added coverage for region bbox containment linking, `linked_region_ids` in layout debug JSON, empty `linked_region_ids` with `no_linked_text_region`, and route-level consistency between `_regions.json` and `_layout_blocks.json`.
+- Step 4A coverage remains active for region JSON / overlay generation.
+- Step 2 ignored/image processing protection remains covered.
+
+### Manual Check
+
+- Checked a web screenshot region overlay.
+  - Output: `storage/debug/layout/manual_step4b_web_region_overlay.png`
+  - JSON: `storage/debug/layout/manual_step4b_web_regions.json`
+  - Layout JSON: `storage/debug/layout/manual_step4b_web_layout_blocks.json`
+  - Result: detected one `button_like` region with one linked layout block.
+- Checked a manga / illustration region overlay.
+  - Output: `storage/debug/layout/manual_step4b_manga_region_overlay.png`
+  - JSON: `storage/debug/layout/manual_step4b_manga_regions.json`
+  - Layout JSON: `storage/debug/layout/manual_step4b_manga_layout_blocks.json`
+  - Result: detected 14 candidate regions and 12 layout blocks with linked region ids.
+- Confirmed overlay labels show `region_type`, score, and `links={count}`.
+- Final translated output was not expected to change because Step 4B remains debug-only.
+
+### Known Limits
+
+- This step only links existing debug candidates and layout blocks.
+- It does not improve region detection quality.
+- It does not use regions for OCR, translation, mask, inpaint, render, or layout.
+- It does not handle logo skip; `trust name` remains a known limit.
+- False positive or missing region candidates from Step 4A remain possible.

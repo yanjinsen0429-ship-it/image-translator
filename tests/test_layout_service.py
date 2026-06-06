@@ -14,6 +14,7 @@ from app.services.layout_service import (
     normalize_ocr_block,
 )
 from app.services.region_service import (
+    TextRegion,
     detect_text_regions,
     export_region_debug_json,
     export_region_debug_overlay,
@@ -255,6 +256,71 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertEqual(ignored["block_type"], "ignored")
         self.assertTrue(ignored["is_ignored"])
         self.assertFalse(ignored["enters_translation"])
+
+    def test_region_links_block_when_region_contains_block_bbox(self) -> None:
+        blocks = [
+            {
+                "id": "layout-contained",
+                "text": "Inside bubble",
+                "bbox": {"x": 42, "y": 34, "width": 40, "height": 14},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "bubble.png"
+            image = Image.new("RGB", (160, 120), (120, 120, 120))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((25, 20, 135, 90), fill="white")
+            image.save(image_path)
+
+            regions = detect_text_regions(image_path=image_path, layout_blocks=blocks)
+
+        self.assertTrue(any("layout-contained" in region.linked_block_ids for region in regions))
+
+    def test_layout_debug_json_includes_linked_region_ids(self) -> None:
+        blocks = [
+            {
+                "id": "layout-contained",
+                "text": "Inside bubble",
+                "block_type": "normal",
+                "bbox": {"x": 42, "y": 34, "width": 40, "height": 14},
+            }
+        ]
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(25, 20, 135, 90),
+                polygon=[[25, 20], [135, 20], [135, 90], [25, 90]],
+                score=0.98,
+                linked_block_ids=["layout-contained"],
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "layout_blocks.json"
+            export_layout_debug_json(blocks=blocks, output_path=output_path, regions=regions)
+            data = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["blocks"][0]["linked_region_ids"], ["region-1"])
+        self.assertNotIn("no_linked_text_region", data["blocks"][0]["debug_notes"])
+
+    def test_layout_debug_json_marks_empty_linked_region_ids_without_regions(self) -> None:
+        blocks = [
+            {
+                "id": "layout-orphan",
+                "text": "No region",
+                "block_type": "normal",
+                "bbox": {"x": 42, "y": 34, "width": 40, "height": 14},
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "layout_blocks.json"
+            export_layout_debug_json(blocks=blocks, output_path=output_path, regions=[])
+            data = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["blocks"][0]["linked_region_ids"], [])
+        self.assertIn("no_linked_text_region", data["blocks"][0]["debug_notes"])
 
     def test_detects_white_bubble_candidate_from_synthetic_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

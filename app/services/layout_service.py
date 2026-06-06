@@ -218,10 +218,14 @@ def export_layout_debug_json(
     blocks: list[dict[str, Any]],
     output_path: str | Path,
     job_id: str | None = None,
+    regions: list[Any] | None = None,
 ) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    debug_blocks = [_layout_block_debug_record(block, index, blocks) for index, block in enumerate(blocks, start=1)]
+    debug_blocks = [
+        _layout_block_debug_record(block, index, blocks, regions or [])
+        for index, block in enumerate(blocks, start=1)
+    ]
     payload = {
         "job_id": job_id,
         "block_count": len(debug_blocks),
@@ -398,6 +402,7 @@ def _layout_block_debug_record(
     block: dict[str, Any],
     index: int,
     all_blocks: list[dict[str, Any]],
+    regions: list[Any],
 ) -> dict[str, Any]:
     bbox = _debug_bbox(block)
     width = bbox_width(bbox)
@@ -405,6 +410,7 @@ def _layout_block_debug_record(
     block_type = str(block.get("block_type") or "normal")
     is_ignored = block_type == "ignored"
     skip_translation = block_type in {"logo", "ignored"}
+    linked_region_ids = _linked_region_ids(block, regions)
     return {
         "index": index,
         "id": block.get("id"),
@@ -423,8 +429,9 @@ def _layout_block_debug_record(
         "translation_skip_reason": f"block_type={block_type}" if skip_translation else None,
         "enters_image_processing": None,
         "image_processing_note": "Current mask/inpaint/render flow does not consume layout block_type.",
+        "linked_region_ids": linked_region_ids,
         "nearby_blocks": _nearby_debug_records(block, index, all_blocks),
-        "debug_notes": _debug_notes_for_block(block_type),
+        "debug_notes": _debug_notes_for_block(block_type, linked_region_ids),
     }
 
 
@@ -487,13 +494,72 @@ def _nearby_debug_records(
     )
 
 
-def _debug_notes_for_block(block_type: str) -> list[str]:
+def _linked_region_ids(block: dict[str, Any], regions: list[Any]) -> list[str]:
+    block_id = block.get("id")
+    block_bbox = _debug_bbox(block)
+    linked: list[str] = []
+    for region in regions:
+        region_id = getattr(region, "id", None)
+        if region_id is None and isinstance(region, dict):
+            region_id = region.get("id")
+        if region_id is None:
+            continue
+
+        linked_block_ids = getattr(region, "linked_block_ids", None)
+        if linked_block_ids is None and isinstance(region, dict):
+            linked_block_ids = region.get("linked_block_ids")
+        if block_id is not None and linked_block_ids and str(block_id) in {str(item) for item in linked_block_ids}:
+            linked.append(str(region_id))
+            continue
+
+        region_bbox = getattr(region, "bbox", None)
+        if region_bbox is None and isinstance(region, dict):
+            region_bbox = region.get("bbox")
+        if region_bbox is None:
+            continue
+        region_bbox = _debug_bbox({"bbox": region_bbox})
+        if _bbox_contains(region_bbox, block_bbox) or _point_inside_bbox(bbox_center(block_bbox), region_bbox):
+            linked.append(str(region_id))
+            continue
+        if _debug_overlap_ratio(block_bbox, region_bbox) >= 0.25:
+            linked.append(str(region_id))
+    return linked
+
+
+def _bbox_contains(container: BBox, inner: BBox) -> bool:
+    return (
+        float(container[0]) <= float(inner[0])
+        and float(container[1]) <= float(inner[1])
+        and float(container[2]) >= float(inner[2])
+        and float(container[3]) >= float(inner[3])
+    )
+
+
+def _point_inside_bbox(point: tuple[float, float], bbox: BBox) -> bool:
+    return float(bbox[0]) <= point[0] <= float(bbox[2]) and float(bbox[1]) <= point[1] <= float(bbox[3])
+
+
+def _debug_overlap_ratio(bbox_a: BBox, bbox_b: BBox) -> float:
+    x1 = max(float(bbox_a[0]), float(bbox_b[0]))
+    y1 = max(float(bbox_a[1]), float(bbox_b[1]))
+    x2 = min(float(bbox_a[2]), float(bbox_b[2]))
+    y2 = min(float(bbox_a[3]), float(bbox_b[3]))
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    overlap_area = (x2 - x1) * (y2 - y1)
+    block_area = max(1.0, bbox_width(bbox_a) * bbox_height(bbox_a))
+    return overlap_area / block_area
+
+
+def _debug_notes_for_block(block_type: str, linked_region_ids: list[str]) -> list[str]:
     notes = [f"final block_type is {block_type}"]
     if block_type in {"logo", "ignored"}:
         notes.append("translation will be skipped for this block_type")
     else:
         notes.append("translation skip only applies to logo or ignored block_type")
     notes.append("layout block_type is diagnostic only for current image processing flow")
+    if not linked_region_ids:
+        notes.append("no_linked_text_region")
     return notes
 
 
