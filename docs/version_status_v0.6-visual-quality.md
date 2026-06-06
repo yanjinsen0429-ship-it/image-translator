@@ -594,3 +594,78 @@ Recommended retest checklist:
 - This step does not change mask, inpaint, or render service internals.
 - This step does not fix final image false-positive erasure if image processing still consumes raw OCR geometry.
 - Bubble detection, logo skip expansion, and visual polish remain out of scope.
+
+## Step 2C-1 Skip Ignored Blocks in Image Processing
+
+### Status
+
+Done
+
+### Goal
+
+- Prevent `ignored` layout blocks from participating in image processing.
+- Reduce false-positive erasure in non-text regions such as character skirt, legs, and shoes.
+- Ensure ignored blocks do not generate mask regions.
+- Ensure ignored / skipped items are not rendered back into the output.
+- Keep normal paragraph and button blocks on the existing mask / inpaint / render path.
+
+### Changes
+
+- Added route-level filtering before mask generation.
+- Mask generation now receives processable refined layout blocks instead of raw OCR blocks.
+- Blocks with `block_type == "ignored"` are removed from the route-level image processing input.
+- Added a defensive skip in `InpaintingService` so ignored blocks do not produce mask polygons.
+- Added a defensive skip in `RenderingService` so `status == "skipped"` or `block_type == "ignored"` items are not drawn.
+- Kept inpaint behavior unchanged; it receives the mask that no longer contains ignored regions.
+- Kept normal blocks on the existing image processing flow.
+- Did not change mask padding, inpaint radius, rendering style, OCR, providers, or frontend.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 102 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+Step-specific coverage:
+
+- `InpaintingService.export_debug_mask` skips ignored blocks.
+- Normal mask regions are still generated.
+- Route-level mask generation receives only processable layout blocks.
+- Refined ignored `]`, `E`, and `门` do not enter mask generation.
+- `RenderingService.export_debug_rendered` skips skipped / ignored items.
+- Normal render items still render.
+- Step 2A.3 remains covered: ignored noise blocks do not appear in returned translation items.
+- Button Horizontal Merge remains covered.
+- Paragraph merge remains covered.
+
+### Manual Check
+
+Manual character-image retest was not run in this step.
+
+Recommended retest checklist:
+
+- Confirm translation results still do not show `]`, `E`, or `门`.
+- Confirm layout debug JSON still marks `]`, `E`, and `门` as `ignored`.
+- Confirm output image has reduced or removed white erasure around skirt, legs, and shoes.
+- Confirm dialogue text still translates and renders normally.
+- Record any remaining small artifacts as known limits rather than expanding into CV, bubble detection, or visual polish in this step.
+
+### Known Limits
+
+- This remains heuristic protection based on existing ignored block classification.
+- If OCR false positives are not marked `ignored`, they may still enter image processing.
+- This step does not expand logo / brand skip.
+- This step does not implement bubble detection.
+- This step does not implement visual polish.

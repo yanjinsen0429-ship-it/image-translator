@@ -83,8 +83,9 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     inpainted_path = None
     try:
         inpainting_service = InpaintingService()
+        image_processing_input = _without_ignored_blocks(translation_input)
         mask_path = inpainting_service.export_debug_mask(
-            ocr_result=ocr_result,
+            ocr_result=image_processing_input,
             image_path=input_path,
             debug_mask_dir=settings.debug_dir / "mask",
             image_id=job_id,
@@ -139,6 +140,17 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
             }
         ],
         "errors": [],
+    }
+
+
+def _without_ignored_blocks(ocr_result: dict) -> dict:
+    return {
+        **ocr_result,
+        "blocks": [
+            block
+            for block in ocr_result.get("blocks", [])
+            if block.get("block_type") != "ignored"
+        ],
     }
 
 

@@ -80,6 +80,39 @@ class RenderingServiceSkeletonTest(unittest.TestCase):
             with Image.open(output_path) as output_image:
                 self.assertEqual(output_image.size, (120, 80))
 
+    def test_export_debug_rendered_skips_skipped_and_ignored_items(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (120, 80), "white")
+        translation_items = [
+            {
+                "translated_text": "]",
+                "status": "skipped",
+                "bbox": {"x": 10, "y": 10, "width": 40, "height": 24},
+            },
+            {
+                "translated_text": "E",
+                "block_type": "ignored",
+                "bbox": {"x": 60, "y": 10, "width": 40, "height": 24},
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "inpainted.png"
+            image.save(image_path)
+
+            output_path = service.export_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=root / "rendered",
+                image_id="image-123",
+            )
+
+            with Image.open(output_path) as output_image:
+                rendered = np.array(output_image.convert("RGB"))
+
+        self.assertTrue(np.array_equal(np.array(image), rendered))
+
     def test_wrap_chinese_text_within_bbox_width(self) -> None:
         service = RenderingService()
         font = service._load_font(18)

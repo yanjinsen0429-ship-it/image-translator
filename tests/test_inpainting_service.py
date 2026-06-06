@@ -92,6 +92,44 @@ class InpaintingServiceSkeletonTest(unittest.TestCase):
             self.assertEqual(output_path, Path(tmp) / "mask" / "image-123_mask.png")
             self.assertTrue(output_path.exists())
 
+    def test_export_debug_mask_skips_ignored_blocks(self) -> None:
+        service = InpaintingService()
+        ocr_result = {
+            "job_id": "image-123",
+            "image_width": 30,
+            "image_height": 20,
+            "blocks": [
+                {
+                    "block_type": "normal",
+                    "bbox": {
+                        "points": [[2, 2], [8, 2], [8, 8], [2, 8]],
+                    },
+                },
+                {
+                    "block_type": "ignored",
+                    "bbox": {
+                        "points": [[20, 2], [26, 2], [26, 8], [20, 8]],
+                    },
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = service.export_debug_mask(
+                ocr_result=ocr_result,
+                image_path=None,
+                debug_mask_dir=Path(tmp) / "mask",
+                image_id="image-123",
+                padding=0,
+            )
+
+            self.assertIsNotNone(output_path)
+            with Image.open(output_path) as mask_image:
+                mask = np.array(mask_image.convert("L"), dtype=np.uint8)
+
+        self.assertEqual(mask[5, 5], 255)
+        self.assertEqual(mask[5, 23], 0)
+
     def test_remove_text_inpaints_mask_area_and_preserves_unmasked_area(self) -> None:
         service = InpaintingService()
         image = np.full((24, 24, 3), 255, dtype=np.uint8)

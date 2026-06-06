@@ -119,6 +119,8 @@ class InpaintingService:
     def _iter_ocr_polygons(self, ocr_result: dict[str, Any]) -> list[list[Point]]:
         polygons: list[list[Point]] = []
         for block in ocr_result.get("blocks", []):
+            if block.get("block_type") == "ignored":
+                continue
             bbox = block.get("bbox") or {}
             points = bbox.get("points")
             if not points:

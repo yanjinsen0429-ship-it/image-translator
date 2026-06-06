@@ -194,6 +194,8 @@ class RenderingService:
         """Save an image with translated text drawn into OCR boxes."""
         rendered = self._load_image(image_path)
         for item in translation_items:
+            if self._should_skip_render_item(item):
+                continue
             rendered = self.draw_translation_block(rendered, item)
 
         debug_rendered_dir.mkdir(parents=True, exist_ok=True)
@@ -364,3 +366,6 @@ class RenderingService:
             "height": y2 - y1,
             "points": polygon,
         }
+
+    def _should_skip_render_item(self, item: dict[str, Any]) -> bool:
+        return item.get("status") == "skipped" or item.get("block_type") == "ignored"

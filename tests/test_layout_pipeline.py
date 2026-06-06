@@ -306,6 +306,47 @@ class LayoutPipelineTests(unittest.TestCase):
             [item.get("status") for item in result["translation_result"]["items"]],
         )
 
+    def test_pipeline_uses_only_processable_layout_blocks_for_mask_generation(self) -> None:
+        captured_mask: dict = {}
+
+        def fake_debug_mask(**kwargs) -> Path:
+            captured_mask["ocr_result"] = kwargs["ocr_result"]
+            mask_path = kwargs["debug_mask_dir"] / f"{kwargs['image_id']}_mask.png"
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (8, 8), 255).save(mask_path)
+            return mask_path
+
+        fake_translation_settings = SimpleNamespace(
+            translation_provider="deepseek",
+            translation_target_language="zh-CN",
+            deepseek_api_key="test-key",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_timeout_seconds=30,
+        )
+
+        with (
+            patch("app.services.translation_service.settings", fake_translation_settings),
+            patch(
+                "app.services.translation_service.DeepSeekTranslationProvider._request_translation",
+                return_value="你弄脏了我的鞋。",
+            ),
+        ):
+            self._run_route_with_valid_image_and_real_translation(
+                fake_ocr_result=self._make_noise_refine_ocr_result(),
+                rendered_side_effect=self._fake_debug_rendered,
+                mask_side_effect=fake_debug_mask,
+            )
+
+        mask_blocks = captured_mask["ocr_result"]["blocks"]
+        self.assertEqual(len(mask_blocks), 1)
+        self.assertEqual(
+            mask_blocks[0]["text"],
+            "I told you to be careful. It's your fault that you made my shoes dirty.",
+        )
+        self.assertEqual(mask_blocks[0]["block_type"], "paragraph")
+        self.assertNotIn("ignored", [block.get("block_type") for block in mask_blocks])
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -385,6 +426,7 @@ class LayoutPipelineTests(unittest.TestCase):
         self,
         fake_ocr_result: dict,
         rendered_side_effect,
+        mask_side_effect=None,
     ) -> tuple[dict, Path]:
         class FakeUpload:
             filename = "sample.png"
@@ -409,6 +451,8 @@ class LayoutPipelineTests(unittest.TestCase):
         inpainted_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("L", (8, 8), 255).save(mask_path)
         Image.new("RGB", (8, 8), (200, 200, 200)).save(inpainted_path)
+        if mask_side_effect is None:
+            mask_side_effect = lambda **kwargs: mask_path
 
         with (
             patch("app.api.routes.settings", fake_settings),
@@ -416,7 +460,7 @@ class LayoutPipelineTests(unittest.TestCase):
             patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
             patch(
                 "app.api.routes.InpaintingService.export_debug_mask",
-                return_value=mask_path,
+                side_effect=mask_side_effect,
             ),
             patch(
                 "app.api.routes.InpaintingService.export_debug_inpainted",
