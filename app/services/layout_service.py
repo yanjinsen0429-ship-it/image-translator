@@ -57,6 +57,8 @@ def classify_block(
     bbox = block.get("bbox")
     if not text or bbox is None:
         return "ignored"
+    if is_likely_ocr_noise_block(block):
+        return "ignored"
 
     words = text.split()
     width = bbox_width(bbox)
@@ -88,6 +90,23 @@ def classify_block(
         return "button"
 
     return "normal"
+
+
+def is_likely_ocr_noise_block(block: dict[str, Any]) -> bool:
+    text = str(block.get("text") or "").strip()
+    bbox = block.get("bbox")
+    if not text or bbox is None:
+        return False
+
+    if text in {"]", "[", "|", "/", "\\", "_", ".", ",", ":", ";"}:
+        return True
+
+    if text not in {"E", "I", "l"}:
+        return False
+
+    width = bbox_width(bbox)
+    height = bbox_height(bbox)
+    return width <= 12 and height <= 18 and (width * height) <= 216
 
 
 def merge_ocr_blocks(

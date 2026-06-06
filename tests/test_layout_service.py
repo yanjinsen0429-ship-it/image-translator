@@ -92,6 +92,28 @@ class LayoutServiceTests(unittest.TestCase):
 
         self.assertIn(classify_block(block, image_size=(400, 300)), {"logo", "ignored"})
 
+    def test_standalone_closing_bracket_is_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("]", (42, 60, 50, 72), "noise"), index=0)
+
+        self.assertEqual(classify_block(block), "ignored")
+
+    def test_standalone_vertical_bar_is_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("|", (42, 60, 48, 78), "noise"), index=0)
+
+        self.assertEqual(classify_block(block), "ignored")
+
+    def test_small_isolated_e_is_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("E", (42, 60, 51, 72), "noise"), index=0)
+
+        self.assertEqual(classify_block(block), "ignored")
+
+    def test_short_button_like_text_is_not_marked_as_ignored(self) -> None:
+        for text in ("OK", "Go", "No", "Yes"):
+            with self.subTest(text=text):
+                block = normalize_ocr_block(make_block(text, (20, 20, 70, 44), text), index=0)
+
+                self.assertNotEqual(classify_block(block), "ignored")
+
     def test_merged_bbox_covers_source_blocks(self) -> None:
         blocks = [
             make_block("Line one", (20, 20, 160, 44), "a"),
