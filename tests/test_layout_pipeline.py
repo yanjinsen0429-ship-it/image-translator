@@ -324,16 +324,46 @@ class LayoutPipelineTests(unittest.TestCase):
 
         layout_json_path = root_path / "debug" / "layout" / f"{result['job_id']}_layout_blocks.json"
         regions_json_path = root_path / "debug" / "layout" / f"{result['job_id']}_regions.json"
+        render_fit_json_path = root_path / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
         layout_data = json.loads(layout_json_path.read_text(encoding="utf-8"))
         regions_data = json.loads(regions_json_path.read_text(encoding="utf-8"))
+        render_fit_data = json.loads(render_fit_json_path.read_text(encoding="utf-8"))
         layout_block = layout_data["blocks"][0]
         linked_region_id = layout_block["linked_region_ids"][0]
         linked_region = next(region for region in regions_data["regions"] if region["id"] == linked_region_id)
+        render_fit_record = render_fit_data["records"][0]
 
         self.assertEqual(layout_block["text"], "Hello")
         self.assertEqual(layout_block["linked_region_ids"], [linked_region["id"]])
         self.assertIn(layout_block["id"], linked_region["linked_block_ids"])
         self.assertEqual(linked_region["region_type"], "bubble")
+        self.assertEqual(render_fit_data["record_count"], 1)
+        self.assertEqual(render_fit_record["block_id"], layout_block["id"])
+        self.assertEqual(render_fit_record["linked_region_ids"], layout_block["linked_region_ids"])
+        self.assertEqual(render_fit_record["translated_text_length"], len("mock: Hello"))
+        self.assertIn("estimated_text_density", render_fit_record)
+
+    def test_pipeline_exports_render_fit_debug_json_without_regions(self) -> None:
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        result, root = self._run_route_with_valid_image(
+            fake_ocr_result=self._make_single_block_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=self._fake_debug_rendered,
+        )
+
+        render_fit_json_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
+
+        self.assertTrue(render_fit_json_path.exists())
+        data = json.loads(render_fit_json_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["job_id"], result["job_id"])
+        self.assertEqual(data["record_count"], 1)
+        record = data["records"][0]
+        self.assertEqual(record["block_id"], "layout_block-1")
+        self.assertEqual(record["linked_region_ids"], [])
+        self.assertIn("no_linked_region", record["debug_notes"])
+        self.assertGreater(record["translated_text_length"], 0)
 
     def test_pipeline_keeps_refined_noise_out_of_returned_translation_items(self) -> None:
         captured_render: dict = {}

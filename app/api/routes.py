@@ -22,6 +22,7 @@ from app.services.layout_service import (
 )
 from app.services.ocr_service import create_ocr_result
 from app.services.rendering_service import RenderingService
+from app.services.render_fit_service import export_render_fit_debug_json
 from app.services.region_service import (
     detect_text_regions,
     export_region_debug_json,
@@ -130,6 +131,16 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         ocr_result=translation_input,
     )
     translation_result = _without_skipped_translation_items(translation_result)
+    try:
+        export_render_fit_debug_json(
+            layout_blocks=translation_input.get("blocks", []),
+            translation_result=translation_result,
+            regions=regions,
+            output_path=settings.debug_dir / "layout" / f"{job_id}_render_fit.json",
+            job_id=job_id,
+        )
+    except Exception:
+        logger.exception("Failed to export debug render fit JSON for job %s", job_id)
     try:
         if inpainted_path is not None:
             rendered_path = RenderingService().export_debug_rendered(

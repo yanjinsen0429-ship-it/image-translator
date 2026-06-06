@@ -813,3 +813,85 @@ OK
 - It does not use regions for OCR, translation, mask, inpaint, render, or layout.
 - It does not handle logo skip; `trust name` remains a known limit.
 - False positive or missing region candidates from Step 4A remain possible.
+
+## Step 4C Render Fit Debug Only
+
+### Status
+
+Done
+
+### Goal
+
+- Add structured render-fit debug output for each layout block.
+- Help inspect why translated text may look too small, underuse a bubble bbox, overflow, or sit in an awkward text region.
+- Keep the feature debug-only and avoid changing OCR, translation, mask, inpaint, render, frontend, block classification, API response structure, or final output images.
+
+### Changes
+
+- Added `app/services/render_fit_service.py`.
+- Added render fit debug JSON export:
+
+```text
+storage/debug/layout/{job_id}_render_fit.json
+```
+
+- Each record includes:
+  - `block_id`
+  - `block_type`
+  - `bbox`
+  - `linked_region_ids`
+  - `original_text`
+  - `translated_text`
+  - text lengths
+  - bbox width / height / area
+  - estimated text density
+  - linked region count
+  - selected / min / max font size estimate
+  - line count
+  - text area ratio
+  - possible underfill / overflow / small-font flags
+  - `debug_notes`
+- Uses existing `RenderingService.calculate_text_layout()` for debug estimation only.
+- Route exports render fit JSON after translation result creation, using the same layout blocks and region candidates.
+- No render fit data is passed into mask, inpaint, render, response payloads, or final output decisions.
+- No render fit overlay was added in this step.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 114 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- Added coverage for render fit JSON generation, one record per layout block, `linked_region_ids`, translated text length, no-translation notes, no-linked-region notes, and route-level `_render_fit.json` export.
+- Step 4A / Step 4B coverage remains active.
+- Step 2 ignored/image processing protection remains covered.
+
+### Manual Check
+
+- Checked a web screenshot render fit JSON.
+  - Output: `storage/debug/layout/manual_step4c_web_render_fit.json`
+  - Result: 4 records, 1 record with linked region ids.
+  - Notes included `long_translation`, `no_linked_region`, and `no_translated_text`.
+- Checked a manga / illustration render fit JSON.
+  - Output: `storage/debug/layout/manual_step4c_manga_render_fit.json`
+  - Result: 14 records, 12 records with linked region ids.
+  - Notes included `possible_font_too_small`, `possible_overflow`, `possible_underfilled_bbox`, `possible_vertical_text_region`, and `small_bbox`.
+- Final translated output was not expected to change because Step 4C remains debug-only.
+
+### Known Limits
+
+- This step is diagnostic only.
+- Font and layout values are estimates from current renderer helpers, not a new render policy.
+- It does not change true rendering behavior.
+- It does not add overlay output.
+- It does not improve OCR, translation, mask, inpaint, render, frontend, manga layout, or logo skip.

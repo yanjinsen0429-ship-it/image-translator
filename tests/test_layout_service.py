@@ -322,6 +322,79 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertEqual(data["blocks"][0]["linked_region_ids"], [])
         self.assertIn("no_linked_text_region", data["blocks"][0]["debug_notes"])
 
+    def test_render_fit_debug_json_writes_layout_records(self) -> None:
+        from app.services.render_fit_service import export_render_fit_debug_json
+
+        blocks = [
+            {
+                "id": "layout-linked",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 20, "y": 20, "width": 80, "height": 40},
+                "linked_region_ids": ["region-1"],
+            },
+            {
+                "id": "layout-orphan",
+                "text": "Missing translation",
+                "block_type": "normal",
+                "bbox": {"x": 120, "y": 20, "width": 20, "height": 12},
+            },
+        ]
+        original_blocks = copy.deepcopy(blocks)
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(10, 10, 110, 70),
+                polygon=[[10, 10], [110, 10], [110, 70], [10, 70]],
+                score=0.9,
+                linked_block_ids=["layout-linked"],
+            )
+        ]
+        translation_result = {
+            "items": [
+                {
+                    "block_id": "layout-linked",
+                    "source_text": "Hello",
+                    "translated_text": "你好世界",
+                    "status": "success",
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "render_fit.json"
+            json_path = export_render_fit_debug_json(
+                layout_blocks=blocks,
+                translation_result=translation_result,
+                regions=regions,
+                output_path=output_path,
+                job_id="job-fit",
+            )
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(blocks, original_blocks)
+        self.assertEqual(json_path, output_path)
+        self.assertEqual(data["job_id"], "job-fit")
+        self.assertEqual(data["record_count"], 2)
+        linked = data["records"][0]
+        orphan = data["records"][1]
+        self.assertEqual(linked["block_id"], "layout-linked")
+        self.assertEqual(linked["linked_region_ids"], ["region-1"])
+        self.assertEqual(linked["linked_region_count"], 1)
+        self.assertEqual(linked["original_text_length"], 5)
+        self.assertEqual(linked["translated_text_length"], 4)
+        self.assertEqual(linked["bbox_width"], 80)
+        self.assertEqual(linked["bbox_height"], 40)
+        self.assertEqual(linked["bbox_area"], 3200)
+        self.assertIn("estimated_text_density", linked)
+        self.assertIn("selected_font_size", linked)
+        self.assertIn("line_count", linked)
+        self.assertNotIn("no_translated_text", linked["debug_notes"])
+        self.assertEqual(orphan["linked_region_ids"], [])
+        self.assertIn("no_linked_region", orphan["debug_notes"])
+        self.assertIn("no_translated_text", orphan["debug_notes"])
+
     def test_detects_white_bubble_candidate_from_synthetic_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             image_path = Path(tmp) / "bubble.png"
