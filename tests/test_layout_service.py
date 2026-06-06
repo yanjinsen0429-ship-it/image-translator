@@ -1,8 +1,13 @@
+import copy
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from app.services.layout_service import (
     LayoutBlock,
     classify_block,
+    export_layout_debug_json,
     merge_ocr_blocks,
     normalize_ocr_block,
 )
@@ -146,6 +151,56 @@ class LayoutServiceTests(unittest.TestCase):
                 block = normalize_ocr_block(make_block(text, (20, 20, 70, 44), text), index=0)
 
                 self.assertNotEqual(classify_block(block), "ignored")
+
+    def test_export_layout_debug_json_writes_block_facts_without_mutation(self) -> None:
+        blocks = [
+            {
+                "id": "layout-normal",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 10, "y": 20, "width": 40, "height": 12},
+                "polygon": [[10, 20], [50, 20], [50, 32], [10, 32]],
+                "confidence": 0.91,
+                "source_block_ids": ["ocr-1"],
+            },
+            {
+                "id": "layout-ignored",
+                "text": "]",
+                "block_type": "ignored",
+                "bbox": {"x": 80, "y": 24, "width": 16, "height": 30},
+                "confidence": 0.42,
+            },
+        ]
+        original_blocks = copy.deepcopy(blocks)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "debug" / "layout" / "job-1_layout_blocks.json"
+
+            json_path = export_layout_debug_json(blocks=blocks, output_path=output_path)
+
+            self.assertEqual(json_path, output_path)
+            self.assertTrue(json_path.exists())
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(blocks, original_blocks)
+        self.assertEqual(len(data["blocks"]), 2)
+        normal = data["blocks"][0]
+        ignored = data["blocks"][1]
+        self.assertEqual(normal["index"], 1)
+        self.assertEqual(normal["text"], "Hello")
+        self.assertEqual(normal["block_type"], "normal")
+        self.assertEqual(normal["bbox"], [10, 20, 50, 32])
+        self.assertEqual(normal["width"], 40)
+        self.assertEqual(normal["height"], 12)
+        self.assertEqual(normal["area"], 480)
+        self.assertEqual(normal["center"], [30, 26])
+        self.assertFalse(normal["is_ignored"])
+        self.assertTrue(normal["enters_translation"])
+        self.assertIn("block_type", normal["raw_keys"])
+        self.assertEqual(ignored["text"], "]")
+        self.assertEqual(ignored["block_type"], "ignored")
+        self.assertTrue(ignored["is_ignored"])
+        self.assertFalse(ignored["enters_translation"])
 
     def test_merged_bbox_covers_source_blocks(self) -> None:
         blocks = [

@@ -337,3 +337,99 @@ Recommended retest checklist:
 - Logo / brand skip is not expanded in this step.
 - Bubble detection is not implemented in this step.
 - Visual polish is not implemented in this step.
+
+## Step 2C-0.1 Export Layout Debug JSON
+
+### Status
+
+Done
+
+### Goal
+
+- Export structured layout block debug information for every image processing run.
+- Help diagnose why OCR artifacts such as `]` and `E` are not marked as `ignored`.
+- Record final layout block facts before translation.
+- Do not fix OCR noise rules in this step.
+- Do not change translation, mask, inpaint, render, or final image output behavior.
+
+### Changes
+
+- Added `export_layout_debug_json` in `layout_service`.
+- Added route-level export after layout merge and before translation.
+- Output path:
+
+```text
+storage/debug/layout/{job_id}_layout_blocks.json
+```
+
+- The JSON includes per-block fields such as:
+  - `index`
+  - `id`
+  - `text`
+  - `block_type`
+  - `bbox`
+  - `polygon`
+  - `confidence`
+  - `width`
+  - `height`
+  - `area`
+  - `center`
+  - `is_ignored`
+  - `raw_keys`
+  - `enters_translation`
+  - `translation_skip_reason`
+  - `enters_image_processing`
+  - `image_processing_note`
+  - `nearby_blocks`
+  - `debug_notes`
+- The JSON export creates `storage/debug/layout` automatically when needed.
+- The JSON export does not mutate source block dictionaries.
+- The overlay export and JSON export are isolated so JSON can still be written if overlay rendering fails.
+- Final image processing remains unchanged.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 94 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+Step-specific coverage:
+
+- `export_layout_debug_json` creates a JSON file.
+- JSON contains both normal and ignored blocks.
+- JSON contains `text`, `block_type`, `bbox`, `width`, `height`, `area`, and `is_ignored`.
+- JSON export does not mutate original block dictionaries.
+- The route pipeline writes `{job_id}_layout_blocks.json` under `debug/layout`.
+
+### Manual Check
+
+Manual character-image JSON inspection is the next step:
+
+- Find blocks where `text` is `]` or `E`.
+- Check each block's final `block_type`.
+- Check `bbox`, `width`, `height`, `area`, and `confidence`.
+- Check `nearby_blocks`.
+- Check `enters_translation` and `translation_skip_reason`.
+- Use those facts to decide why the block was not marked `ignored`.
+
+### Known Limits
+
+- This step is diagnostic only.
+- This step does not fix final image false-positive damage.
+- This step does not change OCR noise marking rules.
+- This step does not change translation behavior.
+- This step does not change mask generation.
+- This step does not change inpaint behavior.
+- This step does not change render behavior.

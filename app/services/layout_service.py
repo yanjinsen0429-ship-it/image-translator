@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -210,6 +211,26 @@ def export_layout_debug_overlay(
     return output_path
 
 
+def export_layout_debug_json(
+    blocks: list[dict[str, Any]],
+    output_path: str | Path,
+    job_id: str | None = None,
+) -> Path:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    debug_blocks = [_layout_block_debug_record(block, index, blocks) for index, block in enumerate(blocks, start=1)]
+    payload = {
+        "job_id": job_id,
+        "block_count": len(debug_blocks),
+        "blocks": debug_blocks,
+    }
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return output_path
+
+
 def _should_merge(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
     bbox_a = block_a["bbox"]
     bbox_b = block_b["bbox"]
@@ -333,6 +354,109 @@ def _is_oversized_single_character_bbox(block: dict[str, Any]) -> bool:
     width = bbox_width(bbox)
     height = bbox_height(bbox)
     return width >= 24 or height >= 36
+
+
+def _layout_block_debug_record(
+    block: dict[str, Any],
+    index: int,
+    all_blocks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    bbox = _debug_bbox(block)
+    width = bbox_width(bbox)
+    height = bbox_height(bbox)
+    block_type = str(block.get("block_type") or "normal")
+    is_ignored = block_type == "ignored"
+    skip_translation = block_type in {"logo", "ignored"}
+    return {
+        "index": index,
+        "id": block.get("id"),
+        "text": block.get("text"),
+        "block_type": block_type,
+        "bbox": list(bbox),
+        "polygon": block.get("polygon") or _debug_bbox_points(block),
+        "confidence": block.get("confidence"),
+        "width": width,
+        "height": height,
+        "area": width * height,
+        "center": list(bbox_center(bbox)),
+        "is_ignored": is_ignored,
+        "raw_keys": sorted(str(key) for key in block.keys()),
+        "enters_translation": not skip_translation,
+        "translation_skip_reason": f"block_type={block_type}" if skip_translation else None,
+        "enters_image_processing": None,
+        "image_processing_note": "Current mask/inpaint/render flow does not consume layout block_type.",
+        "nearby_blocks": _nearby_debug_records(block, index, all_blocks),
+        "debug_notes": _debug_notes_for_block(block_type),
+    }
+
+
+def _debug_bbox(block: dict[str, Any]) -> BBox:
+    bbox = block.get("bbox")
+    if isinstance(bbox, dict):
+        if {"x", "y", "width", "height"}.issubset(bbox):
+            x1 = float(bbox["x"])
+            y1 = float(bbox["y"])
+            return _normalize_bbox((x1, y1, x1 + float(bbox["width"]), y1 + float(bbox["height"])))
+        if bbox.get("points"):
+            return polygon_to_bbox(bbox["points"])
+    if isinstance(bbox, tuple | list) and len(bbox) >= 4:
+        return _normalize_bbox((float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])))
+    return (0, 0, 0, 0)
+
+
+def _debug_bbox_points(block: dict[str, Any]) -> list[list[float]] | None:
+    bbox = block.get("bbox")
+    if isinstance(bbox, dict) and bbox.get("points"):
+        return bbox["points"]
+    return None
+
+
+def _nearby_debug_records(
+    block: dict[str, Any],
+    index: int,
+    all_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bbox = _debug_bbox(block)
+    max_dimension = max(bbox_width(bbox), bbox_height(bbox), 1)
+    nearby = []
+    for other_index, other in enumerate(all_blocks, start=1):
+        if other is block:
+            continue
+        other_bbox = _debug_bbox(other)
+        gap = vertical_gap(bbox, other_bbox)
+        horizontal_overlap = horizontal_overlap_ratio(bbox, other_bbox)
+        if gap > max_dimension * 2 and horizontal_overlap <= 0:
+            continue
+        nearby.append(
+            {
+                "index": other_index,
+                "id": other.get("id"),
+                "text": other.get("text"),
+                "block_type": other.get("block_type"),
+                "bbox": list(other_bbox),
+                "center": list(bbox_center(other_bbox)),
+                "vertical_gap": gap,
+                "horizontal_overlap_ratio": horizontal_overlap,
+            }
+        )
+    return sorted(
+        nearby,
+        key=lambda record: (
+            float(record["vertical_gap"]),
+            abs(float(record["center"][0]) - float(bbox_center(bbox)[0])),
+            int(record["index"]) if int(record["index"]) != index else 0,
+        ),
+    )
+
+
+def _debug_notes_for_block(block_type: str) -> list[str]:
+    notes = [f"final block_type is {block_type}"]
+    if block_type in {"logo", "ignored"}:
+        notes.append("translation will be skipped for this block_type")
+    else:
+        notes.append("translation skip only applies to logo or ignored block_type")
+    notes.append("layout block_type is diagnostic only for current image processing flow")
+    return notes
 
 
 def _render_geometry(block: dict[str, Any]) -> list[tuple[int, int]] | None:

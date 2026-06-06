@@ -1,6 +1,7 @@
 import asyncio
 import io
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -221,6 +222,25 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertTrue(overlay_path.exists())
         with Image.open(overlay_path) as overlay_image:
             self.assertEqual(overlay_image.size, (8, 8))
+
+    def test_pipeline_exports_layout_debug_json(self) -> None:
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return self._make_translation_result(job_id, ocr_result)
+
+        result, root = self._run_route_with_valid_image(
+            fake_ocr_result=self._make_single_block_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=self._fake_debug_rendered,
+        )
+
+        json_path = root / "debug" / "layout" / f"{result['job_id']}_layout_blocks.json"
+
+        self.assertTrue(json_path.exists())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["job_id"], result["job_id"])
+        self.assertEqual(len(data["blocks"]), 1)
+        self.assertEqual(data["blocks"][0]["text"], "Hello World")
+        self.assertIn("enters_translation", data["blocks"][0])
 
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:

@@ -14,7 +14,12 @@ from app.services.file_service import (
 )
 from app.services.image_render_service import create_mock_output_image
 from app.services.inpainting_service import InpaintingService
-from app.services.layout_service import LayoutBlock, export_layout_debug_overlay, merge_ocr_blocks
+from app.services.layout_service import (
+    LayoutBlock,
+    export_layout_debug_json,
+    export_layout_debug_overlay,
+    merge_ocr_blocks,
+)
 from app.services.ocr_service import create_ocr_result
 from app.services.rendering_service import RenderingService
 from app.services.translation_service import create_translation_result
@@ -66,6 +71,14 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         )
     except Exception:
         logger.exception("Failed to export debug layout overlay for job %s", job_id)
+    try:
+        export_layout_debug_json(
+            blocks=translation_input.get("blocks", []),
+            output_path=settings.debug_dir / "layout" / f"{job_id}_layout_blocks.json",
+            job_id=job_id,
+        )
+    except Exception:
+        logger.exception("Failed to export debug layout JSON for job %s", job_id)
 
     inpainted_path = None
     try:
