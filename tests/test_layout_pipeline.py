@@ -242,6 +242,70 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(data["blocks"][0]["text"], "Hello World")
         self.assertIn("enters_translation", data["blocks"][0])
 
+    def test_pipeline_keeps_refined_noise_out_of_returned_translation_items(self) -> None:
+        captured_render: dict = {}
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            captured_render["items"] = translation_items
+            return self._fake_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=debug_rendered_dir,
+                image_id=image_id,
+            )
+
+        fake_translation_settings = SimpleNamespace(
+            translation_provider="deepseek",
+            translation_target_language="zh-CN",
+            deepseek_api_key="test-key",
+            deepseek_base_url="https://api.deepseek.com",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_timeout_seconds=30,
+        )
+
+        with (
+            patch("app.services.translation_service.settings", fake_translation_settings),
+            patch(
+                "app.services.translation_service.DeepSeekTranslationProvider._request_translation",
+                return_value="你弄脏了我的鞋。",
+            ) as request_translation,
+        ):
+            result, root = self._run_route_with_valid_image_and_real_translation(
+                fake_ocr_result=self._make_noise_refine_ocr_result(),
+                rendered_side_effect=fake_debug_rendered,
+            )
+
+        json_path = root / "debug" / "layout" / f"{result['job_id']}_layout_blocks.json"
+        debug_data = json.loads(json_path.read_text(encoding="utf-8"))
+        debug_blocks_by_text = {block["text"]: block for block in debug_data["blocks"]}
+
+        self.assertEqual(
+            request_translation.call_args_list[0].args[0],
+            "I told you to be careful. It's your fault that you made my shoes dirty.",
+        )
+        self.assertEqual(request_translation.call_count, 1)
+        for text in ("]", "E", "门"):
+            self.assertEqual(debug_blocks_by_text[text]["block_type"], "ignored")
+            self.assertTrue(debug_blocks_by_text[text]["is_ignored"])
+            self.assertFalse(debug_blocks_by_text[text]["enters_translation"])
+        self.assertEqual(
+            [item["source_text"] for item in result["translation_result"]["items"]],
+            ["I told you to be careful. It's your fault that you made my shoes dirty."],
+        )
+        self.assertEqual(
+            [item["source_text"] for item in captured_render["items"]],
+            ["I told you to be careful. It's your fault that you made my shoes dirty."],
+        )
+        self.assertNotIn(
+            "skipped",
+            [item.get("status") for item in result["translation_result"]["items"]],
+        )
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -317,6 +381,54 @@ class LayoutPipelineTests(unittest.TestCase):
         ):
             return asyncio.run(translate_image(FakeUpload())), root_path
 
+    def _run_route_with_valid_image_and_real_translation(
+        self,
+        fake_ocr_result: dict,
+        rendered_side_effect,
+    ) -> tuple[dict, Path]:
+        class FakeUpload:
+            filename = "sample.png"
+
+            async def read(self):
+                buffer = io.BytesIO()
+                Image.new("RGB", (8, 8), (255, 255, 255)).save(buffer, format="PNG")
+                return buffer.getvalue()
+
+        root_path = Path(tempfile.mkdtemp())
+        fake_settings = SimpleNamespace(
+            upload_dir=root_path / "uploads",
+            output_dir=root_path / "outputs",
+            debug_dir=root_path / "debug",
+            storage_dir=root_path,
+            allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
+            max_upload_bytes=10 * 1024 * 1024,
+        )
+        mask_path = root_path / "debug" / "mask" / "test_mask.png"
+        inpainted_path = root_path / "debug" / "inpainted" / "test_inpainted.png"
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        inpainted_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("L", (8, 8), 255).save(mask_path)
+        Image.new("RGB", (8, 8), (200, 200, 200)).save(inpainted_path)
+
+        with (
+            patch("app.api.routes.settings", fake_settings),
+            patch("app.services.file_service.settings", fake_settings),
+            patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
+            patch(
+                "app.api.routes.InpaintingService.export_debug_mask",
+                return_value=mask_path,
+            ),
+            patch(
+                "app.api.routes.InpaintingService.export_debug_inpainted",
+                return_value=inpainted_path,
+            ),
+            patch(
+                "app.api.routes.RenderingService.export_debug_rendered",
+                side_effect=rendered_side_effect,
+            ),
+        ):
+            return asyncio.run(translate_image(FakeUpload())), root_path
+
     def _make_multiline_ocr_result(self) -> dict:
         return {
             "job_id": "job-layout",
@@ -343,6 +455,7 @@ class LayoutPipelineTests(unittest.TestCase):
         block_id: str,
         text: str,
         bbox: tuple[int, int, int, int],
+        confidence: float = 0.94,
     ) -> dict:
         x1, y1, x2, y2 = bbox
         return {
@@ -355,7 +468,7 @@ class LayoutPipelineTests(unittest.TestCase):
                 "height": y2 - y1,
                 "points": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
             },
-            "confidence": 0.94,
+            "confidence": confidence,
             "line_index": 0,
             "language": "en",
             "source_items": [],
@@ -371,6 +484,55 @@ class LayoutPipelineTests(unittest.TestCase):
                     block_id="block-1",
                     text="Hello World",
                     bbox=(1, 1, 7, 7),
+                ),
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
+        }
+
+    def _make_noise_refine_ocr_result(self) -> dict:
+        return {
+            "job_id": "job-layout",
+            "image_width": 3000,
+            "image_height": 5000,
+            "blocks": [
+                self._make_ocr_block(
+                    block_id="block-1",
+                    text="I told you to be careful.",
+                    bbox=(2121, 426, 2592, 500),
+                ),
+                self._make_ocr_block(
+                    block_id="block-2",
+                    text="It's your fault that",
+                    bbox=(2124, 506, 2588, 570),
+                ),
+                self._make_ocr_block(
+                    block_id="block-3",
+                    text="you made my shoes",
+                    bbox=(2126, 576, 2586, 636),
+                ),
+                self._make_ocr_block(
+                    block_id="block-4",
+                    text="dirty.",
+                    bbox=(2127, 642, 2320, 700),
+                ),
+                self._make_ocr_block(
+                    block_id="block-5",
+                    text="]",
+                    bbox=(946, 2439, 1454, 2984),
+                    confidence=0.08,
+                ),
+                self._make_ocr_block(
+                    block_id="block-6",
+                    text="E",
+                    bbox=(1519, 4083, 2259, 4824),
+                    confidence=0.14,
+                ),
+                self._make_ocr_block(
+                    block_id="block-7",
+                    text="门",
+                    bbox=(946, 2439, 1454, 2984),
+                    confidence=0.08,
                 ),
             ],
             "raw": {"mode": "test"},

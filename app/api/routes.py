@@ -103,6 +103,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
         ocr_result=translation_input,
     )
+    translation_result = _without_skipped_translation_items(translation_result)
     try:
         if inpainted_path is not None:
             rendered_path = RenderingService().export_debug_rendered(
@@ -138,6 +139,17 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
             }
         ],
         "errors": [],
+    }
+
+
+def _without_skipped_translation_items(translation_result: dict) -> dict:
+    return {
+        **translation_result,
+        "items": [
+            item
+            for item in translation_result.get("items", [])
+            if item.get("status") != "skipped"
+        ],
     }
 
 

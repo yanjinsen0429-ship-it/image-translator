@@ -510,3 +510,87 @@ Recommended retest checklist:
 - This step does not expand logo / brand skip.
 - This step does not add visual polish.
 - This step does not change mask, inpaint, or render behavior.
+
+## Step 2A.3 Ensure Refined Noise Blocks Reach Translation
+
+### Status
+
+Done
+
+### Goal
+
+- Verify that refined layout noise blocks reach the real route translation pipeline.
+- Ensure refined `ignored` blocks do not appear as visible translated items in the web response.
+- Keep layout debug JSON aligned with the refined layout block state.
+- Do not add OCR noise rules in this step.
+- Do not change OCR, translation providers, mask generation, inpainting, rendering service logic, frontend, or final image output architecture.
+
+### Root Cause
+
+- `merge_ocr_blocks()` already called `refine_noise_blocks()`.
+- `routes.py` already passed the refined layout blocks to `create_translation_result()`.
+- Debug JSON and translation input were based on the same refined layout block list.
+- The confusing web result came from skipped ignored blocks still being kept in `translation_result.items`.
+- Skipped items preserve their source text and provider name, so the frontend displayed entries such as `]` / `E` with `provider: deepseek` even though DeepSeek request was skipped.
+- Those skipped items were also passed to debug rendering, where they could be drawn back as source text.
+
+### Changes
+
+- Added route-level filtering of skipped translation items after translation result creation.
+- Kept the actual translation provider skip behavior unchanged.
+- Kept debug JSON exporting the refined layout block facts, including ignored blocks and `enters_translation == false`.
+- Kept ignored blocks out of returned web `translation_result.items`.
+- Kept ignored blocks out of route-level render input.
+- Did not modify `layout_service` noise rules in this step.
+- Did not modify image processing services or frontend.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 99 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+Step-specific coverage:
+
+- Route pipeline uses refined layout blocks before translation.
+- Standalone `]` is `ignored` in the real route pipeline.
+- Large isolated `E` is `ignored` in the real route pipeline.
+- Low-confidence large single CJK `门` is `ignored` in the real route pipeline.
+- DeepSeek request is only called for the real paragraph block.
+- Ignored skipped blocks are not returned as visible translation items.
+- Ignored skipped blocks are not passed to route-level render input.
+- Debug JSON block types match the refined layout state.
+- Paragraph merge remains covered.
+- `Abuse` + `report` button merge remains covered.
+
+### Manual Check
+
+Manual character-image retest was not run in this step.
+
+Recommended retest checklist:
+
+- Confirm layout debug JSON still shows `]`, `E`, and `门` as `ignored`.
+- Confirm web translation result no longer lists those ignored blocks as DeepSeek translation items.
+- Confirm only real paragraph text appears in visible translation results.
+- Confirm output image behavior separately; if white-block damage remains, that belongs to a later image-processing step.
+
+### Known Limits
+
+- This step does not change OCR detection.
+- This step does not add new noise heuristics.
+- This step does not change DeepSeek or mock provider logic.
+- This step does not change mask, inpaint, or render service internals.
+- This step does not fix final image false-positive erasure if image processing still consumes raw OCR geometry.
+- Bubble detection, logo skip expansion, and visual polish remain out of scope.
