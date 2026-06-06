@@ -433,3 +433,80 @@ Manual character-image JSON inspection is the next step:
 - This step does not change mask generation.
 - This step does not change inpaint behavior.
 - This step does not change render behavior.
+
+## Step 2A.2 Low-confidence Single CJK Noise Guard
+
+### Status
+
+Done
+
+### Goal
+
+- Handle OCR false positives where non-text character-art regions are detected as a low-confidence single CJK character.
+- Cover the observed character-image case where the skirt / leg region was detected as `门`.
+- Mark only very clear noise as `ignored` at the layout layer.
+- Do not change translation providers, mask generation, inpainting, rendering, routes, frontend, or final image output behavior.
+
+### Changes
+
+- Added a low-confidence single CJK noise guard in `layout_service`.
+- The rule requires all of the following:
+  - single CJK character
+  - low confidence, currently `confidence < 0.2`
+  - large bbox area, currently `area > 50000`
+  - isolated from nearby normal text blocks
+  - initial `block_type` is `normal`
+- The observed `门` case with bbox `[946, 2439, 1454, 2984]` and confidence `0.08` is marked as `ignored`.
+- Existing OCR noise rules remain in place for standalone symbols and isolated `E` / `I` / `l`.
+- Image processing remains unchanged.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 98 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+Step-specific coverage:
+
+- Low-confidence large isolated `门` is marked as `ignored`.
+- The ignored `门` block reports `enters_translation == false` in layout debug JSON.
+- High-confidence normal-size `门` is not marked as `ignored`.
+- A CJK single character near another text block is not marked as `ignored`.
+- Existing English short-text protections remain covered.
+- Existing `]`, `|`, and large isolated `E` noise behavior remains covered.
+- Button Horizontal Merge and paragraph merge regressions remain covered.
+
+### Manual Check
+
+Manual character-image retest was not run in this step.
+
+Recommended retest checklist:
+
+- Confirm the layout debug JSON block where `text == "门"` now has `block_type == "ignored"`.
+- Confirm the same block has `is_ignored == true` and `enters_translation == false`.
+- Confirm translation results no longer include `门` or a DeepSeek result for that block.
+- Confirm `E` remains `ignored`.
+- Check whether skirt / leg white-block damage improves.
+- If `门` is ignored but final image damage remains, the remaining issue is that image processing still does not consume layout `block_type`, which belongs to a later Step 2C-1.
+
+### Known Limits
+
+- This remains a conservative heuristic.
+- If OCR produces a high-confidence single CJK character, it will be preserved.
+- If OCR produces a complete word or phrase false positive, this rule may not catch it.
+- This step does not handle bubble detection.
+- This step does not expand logo / brand skip.
+- This step does not add visual polish.
+- This step does not change mask, inpaint, or render behavior.

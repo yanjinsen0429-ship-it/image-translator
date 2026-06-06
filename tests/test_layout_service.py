@@ -133,6 +133,53 @@ class LayoutServiceTests(unittest.TestCase):
                 self.assertEqual(layout_blocks[0].text, text)
                 self.assertEqual(layout_blocks[0].block_type, "ignored")
 
+    def test_low_confidence_large_isolated_cjk_single_character_is_marked_as_ignored(self) -> None:
+        layout_blocks = merge_ocr_blocks(
+            [make_block("门", (946, 2439, 1454, 2984), "cjk-noise", confidence=0.08)]
+        )
+
+        self.assertEqual(len(layout_blocks), 1)
+        self.assertEqual(layout_blocks[0].text, "门")
+        self.assertEqual(layout_blocks[0].block_type, "ignored")
+
+    def test_low_confidence_large_ignored_cjk_single_character_does_not_enter_translation(self) -> None:
+        layout_block = merge_ocr_blocks(
+            [make_block("门", (946, 2439, 1454, 2984), "cjk-noise", confidence=0.08)]
+        )[0]
+        blocks = [
+            {
+                "id": layout_block.id,
+                "text": layout_block.text,
+                "block_type": layout_block.block_type,
+                "bbox": layout_block.bbox,
+                "polygon": layout_block.polygon,
+                "confidence": layout_block.confidence,
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "layout_blocks.json"
+            export_layout_debug_json(blocks=blocks, output_path=output_path)
+            data = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(data["blocks"][0]["is_ignored"])
+        self.assertFalse(data["blocks"][0]["enters_translation"])
+
+    def test_high_confidence_cjk_single_character_is_not_marked_as_ignored(self) -> None:
+        block = normalize_ocr_block(make_block("门", (20, 20, 48, 52), "real-cjk", confidence=0.95), index=0)
+
+        self.assertNotEqual(classify_block(block), "ignored")
+
+    def test_cjk_single_character_near_text_group_is_not_marked_as_ignored(self) -> None:
+        layout_blocks = merge_ocr_blocks(
+            [
+                make_block("门", (20, 20, 70, 70), "cjk-1", confidence=0.08),
+                make_block("口", (22, 76, 72, 126), "cjk-2", confidence=0.82),
+            ]
+        )
+
+        self.assertNotIn("ignored", [block.block_type for block in layout_blocks])
+
     def test_single_letter_near_text_group_is_not_marked_as_ignored(self) -> None:
         layout_blocks = merge_ocr_blocks(
             [

@@ -170,7 +170,10 @@ def merge_ocr_blocks(
 def refine_noise_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     refined: list[dict[str, Any]] = []
     for block in blocks:
-        if _is_isolated_single_letter_noise(block, blocks):
+        if _is_isolated_single_letter_noise(block, blocks) or _is_low_confidence_large_isolated_cjk_noise(
+            block,
+            blocks,
+        ):
             refined.append({**block, "block_type": "ignored"})
         else:
             refined.append(block)
@@ -337,6 +340,41 @@ def _is_isolated_single_letter_noise(
         return True
 
     return _is_oversized_single_character_bbox(block)
+
+
+def _is_low_confidence_large_isolated_cjk_noise(
+    block: dict[str, Any],
+    blocks: list[dict[str, Any]],
+) -> bool:
+    text = str(block.get("text") or "").strip()
+    if block.get("block_type") != "normal" or not _is_single_cjk_character(text):
+        return False
+
+    confidence = block.get("confidence")
+    if confidence is None or float(confidence) >= 0.2:
+        return False
+
+    bbox = block["bbox"]
+    if bbox_width(bbox) * bbox_height(bbox) <= 50_000:
+        return False
+
+    return not any(
+        other is not block
+        and other.get("block_type") == "normal"
+        and _is_text_neighbor(block, other)
+        for other in blocks
+    )
+
+
+def _is_single_cjk_character(text: str) -> bool:
+    if len(text) != 1:
+        return False
+    codepoint = ord(text)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
 
 
 def _is_text_neighbor(block_a: dict[str, Any], block_b: dict[str, Any]) -> bool:
