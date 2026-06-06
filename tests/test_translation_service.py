@@ -101,6 +101,68 @@ class MockTranslationProviderTests(unittest.TestCase):
         self.assertEqual(results[0]["bbox"]["x"], 10)
         self.assertEqual(results[0]["confidence"], 0.96)
 
+    def test_ignored_block_is_skipped_without_calling_mock_translate_text(self):
+        provider = MockTranslationProvider(target_language="zh-CN")
+        blocks = [
+            {
+                "id": "noise-1",
+                "text": "]",
+                "block_type": "ignored",
+                "bbox": {"x": 10, "y": 20, "width": 8, "height": 12, "points": None},
+                "confidence": 0.5,
+                "language": "en",
+            }
+        ]
+
+        with patch.object(provider, "translate_text", wraps=provider.translate_text) as translate_text:
+            results = provider.translate_blocks(blocks)
+
+        translate_text.assert_not_called()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["block_id"], "noise-1")
+        self.assertEqual(results[0]["source_text"], "]")
+        self.assertEqual(results[0]["status"], "skipped")
+        self.assertNotIn("模拟翻译", results[0]["translated_text"])
+
+    def test_mixed_blocks_skip_ignored_and_preserve_order(self):
+        provider = MockTranslationProvider(target_language="zh-CN")
+        blocks = [
+            {
+                "id": "normal-1",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 10, "y": 20, "width": 60, "height": 20, "points": None},
+                "confidence": 0.96,
+                "language": "en",
+            },
+            {
+                "id": "noise-1",
+                "text": "]",
+                "block_type": "ignored",
+                "bbox": {"x": 80, "y": 20, "width": 8, "height": 12, "points": None},
+                "confidence": 0.5,
+                "language": "en",
+            },
+            {
+                "id": "normal-2",
+                "text": "World",
+                "block_type": "normal",
+                "bbox": {"x": 10, "y": 50, "width": 60, "height": 20, "points": None},
+                "confidence": 0.95,
+                "language": "en",
+            },
+        ]
+
+        with patch.object(provider, "translate_text", wraps=provider.translate_text) as translate_text:
+            results = provider.translate_blocks(blocks)
+
+        self.assertEqual([item["block_id"] for item in results], ["normal-1", "noise-1", "normal-2"])
+        self.assertEqual([item["status"] for item in results], ["success", "skipped", "success"])
+        self.assertEqual(translate_text.call_count, 2)
+        self.assertIn("Hello", results[0]["translated_text"])
+        self.assertNotIn("模拟翻译", results[1]["translated_text"])
+        self.assertIn("World", results[2]["translated_text"])
+
 
 class TranslationServiceTests(unittest.TestCase):
     def make_mock_settings(self) -> SimpleNamespace:
@@ -220,6 +282,48 @@ class DeepSeekTranslationProviderTests(unittest.TestCase):
         )
         self.assertTrue(all(item["provider"] == "deepseek" for item in results))
         self.assertTrue(all(item["error"] is None for item in results))
+
+    def test_deepseek_batch_skips_ignored_block_without_request(self):
+        provider = self.make_provider()
+        blocks = [
+            {
+                "id": "normal-1",
+                "text": "Hello",
+                "block_type": "normal",
+                "bbox": {"x": 10, "y": 20, "width": 60, "height": 20, "points": None},
+                "confidence": 0.96,
+                "language": "en",
+            },
+            {
+                "id": "noise-1",
+                "text": "|",
+                "block_type": "ignored",
+                "bbox": {"x": 80, "y": 20, "width": 6, "height": 18, "points": None},
+                "confidence": 0.5,
+                "language": "en",
+            },
+            {
+                "id": "normal-2",
+                "text": "World",
+                "block_type": "normal",
+                "bbox": {"x": 10, "y": 50, "width": 60, "height": 20, "points": None},
+                "confidence": 0.95,
+                "language": "en",
+            },
+        ]
+
+        with patch.object(
+            provider,
+            "_request_translation",
+            side_effect=["你好", "世界"],
+        ) as request_translation:
+            results = provider.translate_blocks(blocks)
+
+        self.assertEqual([item["block_id"] for item in results], ["normal-1", "noise-1", "normal-2"])
+        self.assertEqual([item["status"] for item in results], ["success", "skipped", "success"])
+        self.assertEqual([item["translated_text"] for item in results], ["你好", "|", "世界"])
+        self.assertEqual(request_translation.call_count, 2)
+        self.assertEqual([call.args[0] for call in request_translation.call_args_list], ["Hello", "World"])
 
     def test_deepseek_api_exception_returns_failed_item(self):
         provider = self.make_provider()

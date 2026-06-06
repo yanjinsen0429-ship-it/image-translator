@@ -137,3 +137,65 @@ OK
 - Bubble detection is not implemented in this step.
 - Concise translation mode is not implemented in this step.
 - Visual polish is not implemented in this step.
+
+## Step 2B Skip Ignored Blocks in Translation
+
+### Status
+
+Done
+
+### Goal
+
+- Prevent `ignored` layout blocks from entering real translation work.
+- Avoid calling translation providers for obvious OCR noise.
+- Keep the existing provider mechanism unchanged.
+- Do not connect this step to mask, inpaint, or render behavior.
+
+### Changes
+
+- Verified the existing translation skip path for `block_type == "ignored"`.
+- Kept provider selection, DeepSeek request handling, mock translation, dotenv, and fallback behavior unchanged.
+- Preserved the existing skipped translation item structure for ignored blocks.
+- Added regression tests proving ignored blocks do not call mock `translate_text`.
+- Added regression tests proving ignored blocks do not call DeepSeek `_request_translation`.
+- Added mixed-block coverage to preserve output order while skipping ignored blocks.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 85 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- The discover verbose command is the recommended test command for this project.
+
+### Acceptance Criteria
+
+- Ignored blocks do not call the mock provider translation entry point.
+- Ignored blocks do not call the DeepSeek request entry point.
+- Ignored blocks return skipped translation items instead of normal translated text.
+- Normal blocks still translate normally.
+- Mixed normal / ignored / normal blocks preserve output order.
+- Step 2A OCR noise marking tests still pass.
+- Button Horizontal Merge tests still pass.
+- Mask, inpaint, and render flows are not modified.
+- Full unittest discover passes.
+
+### Known Limits
+
+- This step only skips translation work.
+- This step does not directly fix final image false-positive damage.
+- This step does not skip mask, inpaint, or render.
+- Final non-text image protection still requires a later Step 2C.
+- Logo / brand skip is not expanded in this step.
+- Bubble detection is not implemented in this step.
+- Concise translation mode is not implemented in this step.
