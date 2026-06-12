@@ -100,6 +100,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         )
     except Exception:
         logger.exception("Failed to export debug text regions for job %s", job_id)
+    translation_input = _with_unsafe_block_guards(translation_input, regions=regions)
     try:
         export_layout_debug_json(
             blocks=translation_input.get("blocks", []),
@@ -135,6 +136,10 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         ocr_result=translation_input,
     )
     translation_result = _without_skipped_translation_items(translation_result)
+    render_translation_result = _without_unrenderable_translation_items(
+        translation_result=translation_result,
+        ocr_result=translation_input,
+    )
     try:
         render_fit_records = build_render_fit_debug_records(
             layout_blocks=translation_input.get("blocks", []),
@@ -161,7 +166,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         if inpainted_path is not None:
             rendered_path = RenderingService().export_debug_rendered(
                 image_path=inpainted_path,
-                translation_items=translation_result.get("items", []),
+                translation_items=render_translation_result.get("items", []),
                 debug_rendered_dir=settings.debug_dir / "rendered",
                 image_id=job_id,
             )
@@ -202,6 +207,23 @@ def _without_ignored_blocks(ocr_result: dict) -> dict:
             block
             for block in ocr_result.get("blocks", [])
             if block.get("block_type") != "ignored"
+            and not block.get("image_processing_skip_reason")
+        ],
+    }
+
+
+def _without_unrenderable_translation_items(translation_result: dict, ocr_result: dict) -> dict:
+    skipped_block_ids = {
+        str(block.get("id"))
+        for block in ocr_result.get("blocks", [])
+        if block.get("render_skip_reason")
+    }
+    return {
+        **translation_result,
+        "items": [
+            item
+            for item in translation_result.get("items", [])
+            if str(item.get("block_id")) not in skipped_block_ids
         ],
     }
 
@@ -215,6 +237,82 @@ def _without_skipped_translation_items(translation_result: dict) -> dict:
             if item.get("status") != "skipped"
         ],
     }
+
+
+def _with_unsafe_block_guards(ocr_result: dict, regions: list | None = None) -> dict:
+    image_size = _ocr_image_size(ocr_result)
+    if image_size is None:
+        return ocr_result
+
+    return {
+        **ocr_result,
+        "blocks": [
+            _with_unsafe_block_guard(block, image_size=image_size, regions=regions or [])
+            for block in ocr_result.get("blocks", [])
+        ],
+    }
+
+
+def _with_unsafe_block_guard(
+    block: dict,
+    image_size: tuple[int, int],
+    regions: list,
+) -> dict:
+    skip_reason = _unsafe_large_short_text_bbox_reason(
+        block=block,
+        image_size=image_size,
+        regions=regions,
+    )
+    if skip_reason is None:
+        return block
+    return {
+        **block,
+        "image_processing_skip_reason": skip_reason,
+        "render_skip_reason": skip_reason,
+    }
+
+
+def _unsafe_large_short_text_bbox_reason(
+    block: dict,
+    image_size: tuple[int, int],
+    regions: list,
+) -> str | None:
+    if block.get("block_type") in {"ignored", "logo", "button"}:
+        return None
+    text = str(block.get("text") or "").strip()
+    if not text or len(text) > 4:
+        return None
+    if _block_has_linked_text_region(block, regions):
+        return None
+
+    bbox = _block_bbox(block)
+    if bbox is None:
+        return None
+    image_width, image_height = image_size
+    image_area = max(1.0, float(image_width) * float(image_height))
+    width = max(0.0, bbox[2] - bbox[0])
+    height = max(0.0, bbox[3] - bbox[1])
+    area_ratio = (width * height) / image_area
+    if (
+        area_ratio >= 0.18
+        and width >= float(image_width) * 0.35
+        and height >= float(image_height) * 0.25
+    ):
+        return "short_text_large_bbox"
+    return None
+
+
+def _block_has_linked_text_region(block: dict, regions: list) -> bool:
+    block_id = block.get("id")
+    if block_id is None:
+        return False
+    for region in regions:
+        linked_block_ids = getattr(region, "linked_block_ids", None)
+        if linked_block_ids is None and isinstance(region, dict):
+            linked_block_ids = region.get("linked_block_ids")
+        if linked_block_ids and str(block_id) in {str(item) for item in linked_block_ids}:
+            return True
+    return False
 
 
 def _create_translation_input_from_layout(ocr_result: dict) -> dict:
@@ -251,6 +349,35 @@ def _ocr_image_size(ocr_result: dict) -> tuple[int, int] | None:
     if width and height:
         return int(width), int(height)
     return None
+
+
+def _block_bbox(block: dict) -> tuple[float, float, float, float] | None:
+    bbox = block.get("bbox")
+    if isinstance(bbox, dict):
+        if {"x", "y", "width", "height"}.issubset(bbox):
+            x = float(bbox["x"])
+            y = float(bbox["y"])
+            return (x, y, x + float(bbox["width"]), y + float(bbox["height"]))
+        points = bbox.get("points")
+        if points:
+            return _points_bbox(points)
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    points = block.get("polygon")
+    if points:
+        return _points_bbox(points)
+    return None
+
+
+def _points_bbox(points: list) -> tuple[float, float, float, float] | None:
+    try:
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not xs or not ys:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
 
 
 def _layout_block_to_translation_block(block: LayoutBlock) -> dict:

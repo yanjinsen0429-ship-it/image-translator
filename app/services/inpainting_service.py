@@ -50,7 +50,7 @@ class InpaintingService:
         width, height = image_size
         combined = np.zeros((height, width), dtype=np.uint8)
 
-        for polygon_points in self._iter_ocr_polygons(ocr_result):
+        for polygon_points in self._iter_ocr_polygons(ocr_result, image_size=image_size):
             mask = polygon_to_mask(image_size, polygon_points)
             combined = np.maximum(combined, mask)
 
@@ -116,14 +116,23 @@ class InpaintingService:
         with Image.open(image_path) as image:
             return image.size
 
-    def _iter_ocr_polygons(self, ocr_result: dict[str, Any]) -> list[list[Point]]:
+    def _iter_ocr_polygons(
+        self,
+        ocr_result: dict[str, Any],
+        image_size: tuple[int, int] | None = None,
+    ) -> list[list[Point]]:
+        image_size = image_size or self._resolve_image_size(ocr_result, image_path=None)
         polygons: list[list[Point]] = []
         for block in ocr_result.get("blocks", []):
             if block.get("block_type") == "ignored":
                 continue
+            if block.get("image_processing_skip_reason"):
+                continue
             bbox = block.get("bbox") or {}
             points = bbox.get("points")
             if not points:
+                continue
+            if image_size is not None and self._is_unsafe_large_short_text_bbox(block, image_size):
                 continue
             polygon: list[Point] = []
             for point in points:
@@ -134,6 +143,54 @@ class InpaintingService:
             if len(polygon) >= 3:
                 polygons.append(polygon)
         return polygons
+
+    def _is_unsafe_large_short_text_bbox(
+        self,
+        block: dict[str, Any],
+        image_size: tuple[int, int],
+    ) -> bool:
+        if block.get("block_type") in {"ignored", "logo", "button"}:
+            return False
+        text = str(block.get("text") or block.get("source_text") or "").strip()
+        if not text or len(text) > 4:
+            return False
+        bbox = self._block_bbox(block)
+        if bbox is None:
+            return False
+        image_width, image_height = image_size
+        image_area = max(1.0, float(image_width) * float(image_height))
+        width = max(0.0, bbox[2] - bbox[0])
+        height = max(0.0, bbox[3] - bbox[1])
+        area_ratio = (width * height) / image_area
+        return (
+            area_ratio >= 0.18
+            and width >= float(image_width) * 0.35
+            and height >= float(image_height) * 0.25
+        )
+
+    def _block_bbox(self, block: dict[str, Any]) -> tuple[float, float, float, float] | None:
+        bbox = block.get("bbox") or {}
+        if isinstance(bbox, dict):
+            if {"x", "y", "width", "height"}.issubset(bbox):
+                x = float(bbox["x"])
+                y = float(bbox["y"])
+                return (x, y, x + float(bbox["width"]), y + float(bbox["height"]))
+            points = bbox.get("points")
+            if points:
+                return self._points_bbox(points)
+        if isinstance(bbox, list | tuple) and len(bbox) >= 4:
+            return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        return None
+
+    def _points_bbox(self, points: list[Any]) -> tuple[float, float, float, float] | None:
+        try:
+            xs = [float(point[0]) for point in points]
+            ys = [float(point[1]) for point in points]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not xs or not ys:
+            return None
+        return (min(xs), min(ys), max(xs), max(ys))
 
     def _load_image_array(self, image: str | Path | np.ndarray) -> np.ndarray:
         if isinstance(image, np.ndarray):

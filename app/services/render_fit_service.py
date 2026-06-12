@@ -97,15 +97,18 @@ def _render_fit_record(
     original_text_length = len(original_text)
     translated_text_length = len(translated_text or "")
     density = translated_text_length / area if area > 0 else 0.0
+    skipped_reason = block.get("render_skip_reason") or block.get("image_processing_skip_reason")
     layout = None
     min_font_size = 10 if block_type == "button" else 12
-    max_font_size = max(min_font_size, min(48, int(max(1.0, height) * 0.8)))
+    max_font_size = max(min_font_size, min(72, int(max(1.0, height) * 0.9)))
     if translated_text:
         layout = renderer.calculate_text_layout(
             text=translated_text,
             bbox=bbox_dict,
             block_type=block_type,
         )
+        min_font_size = int(layout.get("min_font_size") or min_font_size)
+        max_font_size = int(layout.get("max_font_size") or max_font_size)
     text_area_ratio = _text_area_ratio(layout, area)
     selected_font_size = layout.get("font_size") if layout else None
     line_count = len(layout.get("lines", [])) if layout else 0
@@ -123,6 +126,7 @@ def _render_fit_record(
         possible_underfilled_bbox=possible_underfilled_bbox,
         is_font_too_small=is_font_too_small,
         possible_overflow=possible_overflow,
+        skipped_reason=str(skipped_reason) if skipped_reason else None,
     )
     return {
         "block_id": block_id,
@@ -146,6 +150,10 @@ def _render_fit_record(
         "is_font_too_small": is_font_too_small,
         "possible_underfilled_bbox": possible_underfilled_bbox,
         "possible_overflow": possible_overflow,
+        "skipped_reason": skipped_reason,
+        "enters_render": skipped_reason is None,
+        "image_processing_skip_reason": block.get("image_processing_skip_reason"),
+        "enters_image_processing": block.get("image_processing_skip_reason") is None,
         "debug_notes": debug_notes,
     }
 
@@ -259,8 +267,11 @@ def _debug_notes(
     possible_underfilled_bbox: bool,
     is_font_too_small: bool,
     possible_overflow: bool,
+    skipped_reason: str | None = None,
 ) -> list[str]:
     notes: list[str] = []
+    if skipped_reason:
+        notes.append(skipped_reason)
     if not translated_text:
         notes.append("no_translated_text")
     if not linked_region_ids:

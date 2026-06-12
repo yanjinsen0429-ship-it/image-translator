@@ -460,6 +460,47 @@ class LayoutServiceTests(unittest.TestCase):
         self.assertEqual(overlay_path, output_path)
         self.assertEqual(overlay_size, (24, 16))
 
+    def test_render_fit_debug_json_marks_large_short_text_bbox_skip_reason(self) -> None:
+        from app.services.render_fit_service import export_render_fit_debug_json
+
+        blocks = [
+            {
+                "id": "layout-huge-cm",
+                "text": "CM",
+                "block_type": "normal",
+                "bbox": {"x": 0, "y": 45, "width": 100, "height": 55},
+                "render_skip_reason": "short_text_large_bbox",
+                "image_processing_skip_reason": "short_text_large_bbox",
+            }
+        ]
+        translation_result = {
+            "items": [
+                {
+                    "block_id": "layout-huge-cm",
+                    "source_text": "CM",
+                    "translated_text": "厘米",
+                    "status": "success",
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "render_fit.json"
+            json_path = export_render_fit_debug_json(
+                layout_blocks=blocks,
+                translation_result=translation_result,
+                regions=[],
+                output_path=output_path,
+                job_id="job-fit",
+            )
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        record = data["records"][0]
+        self.assertEqual(json_path, output_path)
+        self.assertEqual(record["translated_text"], "厘米")
+        self.assertEqual(record["skipped_reason"], "short_text_large_bbox")
+        self.assertIn("short_text_large_bbox", record["debug_notes"])
+
     def test_detects_white_bubble_candidate_from_synthetic_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             image_path = Path(tmp) / "bubble.png"

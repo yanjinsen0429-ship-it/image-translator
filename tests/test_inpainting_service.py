@@ -130,6 +130,47 @@ class InpaintingServiceSkeletonTest(unittest.TestCase):
         self.assertEqual(mask[5, 5], 255)
         self.assertEqual(mask[5, 23], 0)
 
+    def test_export_debug_mask_skips_large_short_text_bbox(self) -> None:
+        service = InpaintingService()
+        ocr_result = {
+            "job_id": "image-123",
+            "image_width": 120,
+            "image_height": 100,
+            "blocks": [
+                {
+                    "text": "CM",
+                    "block_type": "normal",
+                    "bbox": {
+                        "points": [[0, 45], [100, 45], [100, 100], [0, 100]],
+                    },
+                },
+                {
+                    "text": "real text",
+                    "block_type": "normal",
+                    "bbox": {
+                        "points": [[10, 10], [30, 10], [30, 20], [10, 20]],
+                    },
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = service.export_debug_mask(
+                ocr_result=ocr_result,
+                image_path=None,
+                debug_mask_dir=Path(tmp) / "mask",
+                image_id="image-123",
+                padding=0,
+            )
+
+            self.assertIsNotNone(output_path)
+            with Image.open(output_path) as mask_image:
+                mask = np.array(mask_image.convert("L"), dtype=np.uint8)
+
+        self.assertEqual(mask[12, 12], 255)
+        self.assertEqual(mask[70, 50], 0)
+        self.assertLess(np.count_nonzero(mask) / mask.size, 0.05)
+
     def test_remove_text_inpaints_mask_area_and_preserves_unmasked_area(self) -> None:
         service = InpaintingService()
         image = np.full((24, 24, 3), 255, dtype=np.uint8)

@@ -474,6 +474,66 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertEqual(mask_blocks[0]["block_type"], "paragraph")
         self.assertNotIn("ignored", [block.get("block_type") for block in mask_blocks])
 
+    def test_pipeline_skips_large_short_text_bbox_for_mask_and_render(self) -> None:
+        captured_mask: dict = {}
+        captured_render: dict = {}
+
+        def fake_debug_mask(**kwargs) -> Path:
+            captured_mask["ocr_result"] = kwargs["ocr_result"]
+            mask_path = kwargs["debug_mask_dir"] / f"{kwargs['image_id']}_mask.png"
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (120, 100), 255).save(mask_path)
+            return mask_path
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            captured_render["items"] = translation_items
+            return self._fake_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=debug_rendered_dir,
+                image_id=image_id,
+            )
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            return {
+                "job_id": job_id,
+                "items": [
+                    {
+                        "block_id": block["id"],
+                        "source_text": block["text"],
+                        "translated_text": "厘米" if block["text"] == "CM" else "正常文本",
+                        "bbox": block.get("bbox"),
+                        "block_type": block.get("block_type"),
+                        "status": "success",
+                    }
+                    for block in ocr_result["blocks"]
+                ],
+            }
+
+        result, root = self._run_route_with_valid_image_size(
+            image_size=(120, 100),
+            fake_ocr_result=self._make_large_short_text_bbox_ocr_result(),
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=fake_debug_rendered,
+            mask_side_effect=fake_debug_mask,
+        )
+
+        mask_texts = [block["text"] for block in captured_mask["ocr_result"]["blocks"]]
+        render_texts = [item["source_text"] for item in captured_render["items"]]
+        render_fit_json_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
+        render_fit_data = json.loads(render_fit_json_path.read_text(encoding="utf-8"))
+        skipped_record = next(record for record in render_fit_data["records"] if record["original_text"] == "CM")
+
+        self.assertEqual(mask_texts, ["real text"])
+        self.assertEqual(render_texts, ["real text"])
+        self.assertEqual(skipped_record["skipped_reason"], "short_text_large_bbox")
+        self.assertIn("short_text_large_bbox", skipped_record["debug_notes"])
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -498,6 +558,46 @@ class LayoutPipelineTests(unittest.TestCase):
                 patch("app.api.routes.create_translation_result", side_effect=translation_side_effect),
             ):
                 return asyncio.run(translate_image(FakeUpload()))
+
+    def _run_route_with_valid_image_size(
+        self,
+        image_size: tuple[int, int],
+        fake_ocr_result: dict,
+        translation_side_effect,
+        rendered_side_effect,
+        mask_side_effect,
+    ) -> tuple[dict, Path]:
+        class FakeUpload:
+            filename = "sample.png"
+
+            async def read(self):
+                buffer = io.BytesIO()
+                Image.new("RGB", image_size, (255, 255, 255)).save(buffer, format="PNG")
+                return buffer.getvalue()
+
+        root_path = Path(tempfile.mkdtemp())
+        fake_settings = SimpleNamespace(
+            upload_dir=root_path / "uploads",
+            output_dir=root_path / "outputs",
+            debug_dir=root_path / "debug",
+            storage_dir=root_path,
+            allowed_extensions=(".png", ".jpg", ".jpeg", ".webp"),
+            max_upload_bytes=10 * 1024 * 1024,
+        )
+        inpainted_path = root_path / "debug" / "inpainted" / "test_inpainted.png"
+        inpainted_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", image_size, (200, 200, 200)).save(inpainted_path)
+
+        with (
+            patch("app.api.routes.settings", fake_settings),
+            patch("app.services.file_service.settings", fake_settings),
+            patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
+            patch("app.api.routes.create_translation_result", side_effect=translation_side_effect),
+            patch("app.api.routes.InpaintingService.export_debug_mask", side_effect=mask_side_effect),
+            patch("app.api.routes.InpaintingService.export_debug_inpainted", return_value=inpainted_path),
+            patch("app.api.routes.RenderingService.export_debug_rendered", side_effect=rendered_side_effect),
+        ):
+            return asyncio.run(translate_image(FakeUpload())), root_path
 
     def _run_route_with_valid_image(
         self,
@@ -704,6 +804,29 @@ class LayoutPipelineTests(unittest.TestCase):
                     text="门",
                     bbox=(946, 2439, 1454, 2984),
                     confidence=0.08,
+                ),
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
+        }
+
+    def _make_large_short_text_bbox_ocr_result(self) -> dict:
+        return {
+            "job_id": "job-layout",
+            "image_width": 120,
+            "image_height": 100,
+            "blocks": [
+                self._make_ocr_block(
+                    block_id="huge-cm",
+                    text="CM",
+                    bbox=(0, 45, 100, 100),
+                    confidence=0.26,
+                ),
+                self._make_ocr_block(
+                    block_id="real-text",
+                    text="real text",
+                    bbox=(10, 10, 30, 20),
+                    confidence=0.94,
                 ),
             ],
             "raw": {"mode": "test"},

@@ -20,7 +20,13 @@ class RenderingService:
     ) -> int:
         """Calculate a font size for a target text box."""
         height = max(1, int(bbox.get("height", 16)))
-        return max(min_font_size, min(48, int(height / max(1, line_count) * 0.8)))
+        max_font_size = self._max_font_size(
+            width=max(1, int(bbox.get("width", 1))),
+            height=height,
+            text_length=1,
+            min_font_size=min_font_size,
+        )
+        return max(min_font_size, min(max_font_size, int(height / max(1, line_count) * 0.86)))
 
     def calculate_text_layout(
         self,
@@ -31,17 +37,24 @@ class RenderingService:
         """Fit text into a bbox and return draw-ready layout details."""
         width = max(1, int(bbox.get("width", 1)))
         height = max(1, int(bbox.get("height", 1)))
-        min_font_size = 10 if block_type == "button" else 12
-        max_font_size = max(min_font_size, min(48, int(height * 0.8)))
-        prefer_fewer_lines = len(text.strip()) <= 12 or block_type == "button"
-
+        clean_text = text.strip()
+        min_font_size = self._min_font_size(width=width, height=height, block_type=block_type)
+        max_font_size = self._max_font_size(
+            width=width,
+            height=height,
+            text_length=len(clean_text),
+            min_font_size=min_font_size,
+        )
+        content_box = self._content_box(bbox)
+        prefer_single_line = len(clean_text) <= 8 or block_type == "button"
         best_layout: dict[str, Any] | None = None
+        best_fitting_layout: dict[str, Any] | None = None
         for font_size in range(max_font_size, min_font_size - 1, -1):
             font = self._load_font(font_size)
-            lines = self.wrap_text(text, font=font, max_width=width)
+            lines = self.wrap_text(clean_text, font=font, max_width=content_box["width"])
             text_width = max([self.measure_text_width(line, font) for line in lines] or [0])
             text_height = self._line_block_height(font, len(lines))
-            overflow = text_width > width or text_height > height
+            overflow = text_width > content_box["width"] or text_height > content_box["height"]
             layout = self._build_layout(
                 bbox=bbox,
                 block_type=block_type,
@@ -51,18 +64,19 @@ class RenderingService:
                 text_width=text_width,
                 text_height=text_height,
                 overflow=overflow,
+                content_box=content_box,
+                min_font_size=min_font_size,
+                max_font_size=max_font_size,
             )
             if best_layout is None:
                 best_layout = layout
-            elif prefer_fewer_lines:
-                best_layout = self._choose_short_text_layout(best_layout, layout)
-            else:
-                best_layout = layout
             if not overflow:
-                if not prefer_fewer_lines:
-                    break
+                if best_fitting_layout is None:
+                    best_fitting_layout = layout
+                if not prefer_single_line or len(lines) <= 1:
+                    return layout
 
-        return best_layout or self._build_layout(
+        return best_fitting_layout or best_layout or self._build_layout(
             bbox=bbox,
             block_type=block_type,
             font=self._load_font(min_font_size),
@@ -71,6 +85,9 @@ class RenderingService:
             text_width=0,
             text_height=0,
             overflow=False,
+            content_box=content_box,
+            min_font_size=min_font_size,
+            max_font_size=max_font_size,
         )
 
     def wrap_text(
@@ -100,7 +117,7 @@ class RenderingService:
                 current = candidate
         if current:
             lines.append(current.rstrip())
-        return lines
+        return self._rebalance_short_final_line(lines, font=font, max_width=max_width)
 
     def draw_translation(
         self,
@@ -128,7 +145,7 @@ class RenderingService:
         for index, line in enumerate(layout["lines"][:max_lines]):
             line_width = self.measure_text_width(line, layout["font"])
             if layout["align"] == "center":
-                x = int(bbox.get("x", 0)) + max(0, (int(bbox.get("width", 1)) - int(line_width)) // 2)
+                x = layout["content_x"] + max(0, int((layout["content_width"] - line_width) / 2))
             else:
                 x = layout["start_x"]
             draw.text(
@@ -194,7 +211,7 @@ class RenderingService:
         """Save an image with translated text drawn into OCR boxes."""
         rendered = self._load_image(image_path)
         for item in translation_items:
-            if self._should_skip_render_item(item):
+            if self._should_skip_render_item(item, image_size=rendered.size):
                 continue
             rendered = self.draw_translation_block(rendered, item)
 
@@ -264,6 +281,68 @@ class RenderingService:
             units.append(buffer)
         return units
 
+    def _min_font_size(self, width: int, height: int, block_type: str) -> int:
+        default = 10 if block_type == "button" else 12
+        if width < 12 or height < 12:
+            return 6
+        if height < 20:
+            return min(default, 8)
+        return default
+
+    def _max_font_size(
+        self,
+        width: int,
+        height: int,
+        text_length: int,
+        min_font_size: int,
+    ) -> int:
+        if width < 12 or height < 12:
+            return max(min_font_size, 8)
+        short_text_bonus = 1.0 if text_length <= 8 else 0.9
+        height_limit = int(height * 0.9 * short_text_bonus)
+        width_limit = int(width * (0.42 if text_length <= 4 else 0.32))
+        return max(min_font_size, min(72, max(height_limit, min_font_size), max(width_limit, min_font_size)))
+
+    def _content_box(self, bbox: dict[str, Any]) -> dict[str, int]:
+        x = int(bbox.get("x", 0))
+        y = int(bbox.get("y", 0))
+        width = max(1, int(bbox.get("width", 1)))
+        height = max(1, int(bbox.get("height", 1)))
+        if width < 12 or height < 12:
+            pad_x = 0
+            pad_y = 0
+        else:
+            pad_x = min(max(2, int(width * 0.06)), max(0, (width - 1) // 4))
+            pad_y = min(max(2, int(height * 0.08)), max(0, (height - 1) // 4))
+        return {
+            "x": x + pad_x,
+            "y": y + pad_y,
+            "width": max(1, width - pad_x * 2),
+            "height": max(1, height - pad_y * 2),
+            "pad_x": pad_x,
+            "pad_y": pad_y,
+        }
+
+    def _rebalance_short_final_line(
+        self,
+        lines: list[str],
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        max_width: int,
+    ) -> list[str]:
+        if len(lines) < 2:
+            return lines
+        balanced = lines[:]
+        for index in range(1, len(balanced)):
+            previous = balanced[index - 1]
+            current = balanced[index]
+            if len(current) != 1 or len(previous) <= 2:
+                continue
+            candidate_current = previous[-1] + current
+            if self.measure_text_width(candidate_current, font) <= max_width:
+                balanced[index - 1] = previous[:-1]
+                balanced[index] = candidate_current
+        return balanced
+
     def _line_height(self, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
         bbox = font.getbbox("Ag")
         return max(1, bbox[3] - bbox[1] + 2)
@@ -285,24 +364,22 @@ class RenderingService:
         text_width: float,
         text_height: int,
         overflow: bool,
+        content_box: dict[str, int],
+        min_font_size: int,
+        max_font_size: int,
     ) -> dict[str, Any]:
-        x = int(bbox.get("x", 0))
-        y = int(bbox.get("y", 0))
-        width = max(1, int(bbox.get("width", 1)))
-        height = max(1, int(bbox.get("height", 1)))
-        align = "center" if block_type == "button" or (len("".join(lines)) <= 8 and len(lines) <= 1) else "left"
-        vertical_align = "middle" if block_type == "button" else "top"
-        start_x = x
-        if align == "center":
-            start_x = x + max(0, int((width - text_width) / 2))
-        start_y = y
-        if vertical_align == "middle":
-            start_y = y + max(0, int((height - text_height) / 2))
+        align = "center"
+        vertical_align = "middle"
+        start_x = content_box["x"] + max(0, int((content_box["width"] - text_width) / 2))
+        start_y = content_box["y"] + max(0, int((content_box["height"] - text_height) / 2))
 
         return {
             "font": font,
             "font_size": font_size,
+            "min_font_size": min_font_size,
+            "max_font_size": max_font_size,
             "lines": lines,
+            "line_count": len(lines),
             "text_width": text_width,
             "text_height": text_height,
             "overflow": overflow,
@@ -310,6 +387,12 @@ class RenderingService:
             "vertical_align": vertical_align,
             "start_x": start_x,
             "start_y": start_y,
+            "content_x": content_box["x"],
+            "content_y": content_box["y"],
+            "content_width": content_box["width"],
+            "content_height": content_box["height"],
+            "padding_x": content_box["pad_x"],
+            "padding_y": content_box["pad_y"],
         }
 
     def _choose_short_text_layout(
@@ -367,5 +450,66 @@ class RenderingService:
             "points": polygon,
         }
 
-    def _should_skip_render_item(self, item: dict[str, Any]) -> bool:
-        return item.get("status") == "skipped" or item.get("block_type") == "ignored"
+    def _should_skip_render_item(
+        self,
+        item: dict[str, Any],
+        image_size: tuple[int, int] | None = None,
+    ) -> bool:
+        if item.get("status") == "skipped" or item.get("block_type") == "ignored":
+            return True
+        if item.get("render_skip_reason"):
+            return True
+        if image_size is not None and self._is_unsafe_large_short_text_bbox(item, image_size):
+            return True
+        return False
+
+    def _is_unsafe_large_short_text_bbox(
+        self,
+        item: dict[str, Any],
+        image_size: tuple[int, int],
+    ) -> bool:
+        if item.get("block_type") in {"ignored", "logo", "button"}:
+            return False
+        text = str(item.get("source_text") or item.get("text") or item.get("translated_text") or "").strip()
+        if not text or len(text) > 4:
+            return False
+        bbox = self._item_bbox(item)
+        if bbox is None:
+            return False
+        image_width, image_height = image_size
+        image_area = max(1.0, float(image_width) * float(image_height))
+        width = max(0.0, bbox[2] - bbox[0])
+        height = max(0.0, bbox[3] - bbox[1])
+        area_ratio = (width * height) / image_area
+        return (
+            area_ratio >= 0.18
+            and width >= float(image_width) * 0.35
+            and height >= float(image_height) * 0.25
+        )
+
+    def _item_bbox(self, item: dict[str, Any]) -> tuple[float, float, float, float] | None:
+        bbox = item.get("bbox")
+        if isinstance(bbox, dict):
+            if {"x", "y", "width", "height"}.issubset(bbox):
+                x = float(bbox["x"])
+                y = float(bbox["y"])
+                return (x, y, x + float(bbox["width"]), y + float(bbox["height"]))
+            points = bbox.get("points")
+            if points:
+                return self._points_bbox(points)
+        if isinstance(bbox, tuple | list) and len(bbox) >= 4:
+            return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        polygon = item.get("polygon")
+        if polygon:
+            return self._points_bbox(polygon)
+        return None
+
+    def _points_bbox(self, points: list[Any]) -> tuple[float, float, float, float] | None:
+        try:
+            xs = [float(point[0]) for point in points]
+            ys = [float(point[1]) for point in points]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not xs or not ys:
+            return None
+        return (min(xs), min(ys), max(xs), max(ys))

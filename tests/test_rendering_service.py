@@ -113,6 +113,35 @@ class RenderingServiceSkeletonTest(unittest.TestCase):
 
         self.assertTrue(np.array_equal(np.array(image), rendered))
 
+    def test_export_debug_rendered_skips_large_short_text_bbox(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (120, 100), "white")
+        translation_items = [
+            {
+                "source_text": "CM",
+                "translated_text": "厘米",
+                "bbox": {"x": 0, "y": 45, "width": 100, "height": 55},
+                "block_type": "normal",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "inpainted.png"
+            image.save(image_path)
+
+            output_path = service.export_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=root / "rendered",
+                image_id="image-123",
+            )
+
+            with Image.open(output_path) as output_image:
+                rendered = np.array(output_image.convert("RGB"))
+
+        self.assertTrue(np.array_equal(np.array(image), rendered))
+
     def test_wrap_chinese_text_within_bbox_width(self) -> None:
         service = RenderingService()
         font = service._load_font(18)
@@ -168,6 +197,71 @@ class RenderingServiceSkeletonTest(unittest.TestCase):
 
         self.assertEqual(layout["lines"], ["您的域名"])
         self.assertLessEqual(layout["text_width"], bbox["width"])
+
+    def test_short_chinese_text_uses_readable_large_font_in_roomy_bbox(self) -> None:
+        service = RenderingService()
+        bbox = {"x": 20, "y": 30, "width": 220, "height": 110}
+
+        layout = service.calculate_text_layout(
+            text="你好",
+            bbox=bbox,
+            block_type="paragraph",
+        )
+
+        self.assertEqual(layout["lines"], ["你好"])
+        self.assertGreaterEqual(layout["font_size"], 52)
+        self.assertFalse(layout["overflow"])
+
+    def test_multiline_chinese_layout_is_centered_in_bbox(self) -> None:
+        service = RenderingService()
+        bbox = {"x": 30, "y": 40, "width": 150, "height": 90}
+
+        layout = service.calculate_text_layout(
+            text="第一行中文第二行中文第三行中文",
+            bbox=bbox,
+            block_type="paragraph",
+        )
+
+        bbox_center_x = bbox["x"] + bbox["width"] / 2
+        bbox_center_y = bbox["y"] + bbox["height"] / 2
+        text_center_x = layout["start_x"] + layout["text_width"] / 2
+        text_center_y = layout["start_y"] + layout["text_height"] / 2
+
+        self.assertEqual(layout["align"], "center")
+        self.assertEqual(layout["vertical_align"], "middle")
+        self.assertLessEqual(abs(text_center_x - bbox_center_x), bbox["width"] * 0.08)
+        self.assertLessEqual(abs(text_center_y - bbox_center_y), bbox["height"] * 0.08)
+
+    def test_chinese_wrapping_avoids_single_character_lines_when_width_allows(self) -> None:
+        service = RenderingService()
+        bbox = {"x": 0, "y": 0, "width": 96, "height": 96}
+
+        layout = service.calculate_text_layout(
+            text="这是用于换行测试的中文句子",
+            bbox=bbox,
+            block_type="paragraph",
+        )
+
+        self.assertGreater(layout["line_count"], 1)
+        self.assertTrue(all(len(line) > 1 for line in layout["lines"]))
+        self.assertLessEqual(layout["text_height"], bbox["height"])
+        self.assertFalse(layout["overflow"])
+
+    def test_tiny_bbox_layout_does_not_crash(self) -> None:
+        service = RenderingService()
+        image = Image.new("RGB", (24, 24), "white")
+        bbox = {"x": 4, "y": 4, "width": 3, "height": 3}
+
+        layout = service.calculate_text_layout(
+            text="小",
+            bbox=bbox,
+            block_type="normal",
+        )
+        rendered = service.draw_translation(image, bbox, "小")
+
+        self.assertEqual(rendered.size, image.size)
+        self.assertGreaterEqual(layout["font_size"], 6)
+        self.assertIn("line_count", layout)
 
     def test_multiline_text_total_height_fits_bbox_when_possible(self) -> None:
         service = RenderingService()

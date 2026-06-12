@@ -978,3 +978,124 @@ storage/debug/layout/manual_step4d_manga_render_fit_overlay.png
 - Overlay labels are summaries; full details remain in `_render_fit.json`.
 - It does not change true rendering behavior.
 - It does not improve OCR, translation, mask, inpaint, render, frontend, manga layout, or logo skip.
+
+## Step 5A Improve Render Text Fit and Centering
+
+### Status
+
+Done
+
+### Goal
+
+- Start the first real render quality improvement after the Step 4C / 4D diagnostics.
+- Improve translated text fit inside existing OCR/layout bboxes.
+- Increase readability for short text and reduce underfilled bboxes.
+- Improve horizontal and vertical centering for normal, paragraph, and button text.
+- Keep OCR, translation, provider, mask, inpaint, frontend, layout detection, region detection, and `block_type` logic unchanged.
+
+### Changes
+
+- Updated `RenderingService.calculate_text_layout()` to choose the largest font size that fits the padded bbox content area.
+- Raised the dynamic max font size ceiling for roomy short-text bboxes.
+- Preserved a single-line preference for short text when a fitting single-line layout exists.
+- Added a padded content box so rendered text avoids bbox edges.
+- Changed normal / paragraph text layout to center every line horizontally.
+- Changed normal / paragraph text layout to vertically center the whole text block.
+- Updated Chinese wrapping to use measured character-based wrapping and rebalance one-character final lines when width allows.
+- Added layout metadata used by render fit debug, including `line_count`, `min_font_size`, `max_font_size`, content box, and padding fields.
+- Updated `render_fit_service` to read the renderer's real min / max font size values when translated text is available.
+- This step changes final output because real render placement, font size, wrapping, and centering changed.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 120 tests
+OK
+```
+
+- This was not `Ran 0 tests`.
+- Added coverage for roomy short Chinese text using a readable larger font.
+- Added coverage for multi-line Chinese text staying near bbox center.
+- Added coverage for Chinese wrapping avoiding single-character lines when width allows.
+- Added coverage for tiny bboxes not crashing and still returning layout metadata.
+- Step 4C render fit JSON coverage remains active.
+- Step 4D render fit overlay coverage remains active.
+- Step 4A / Step 4B region-layout debug coverage remains active.
+- Step 2 ignored / image processing protection remains covered.
+
+### Manual Check
+
+- Ran the route on a web image:
+
+```text
+storage/uploads/99596b25a5ac45659dfb670d3acf7864_webpage-retest.webp
+```
+
+- Output:
+
+```text
+storage/outputs/2843ed02a2ac438284a4e21d8e2ebaa5_output.png
+```
+
+- Debug:
+
+```text
+storage/debug/layout/2843ed02a2ac438284a4e21d8e2ebaa5_render_fit.json
+storage/debug/layout/2843ed02a2ac438284a4e21d8e2ebaa5_render_fit_overlay.png
+```
+
+- Ran the route on a manga image:
+
+```text
+storage/uploads/6bd68d1bca4e4885b000aaa8ddba8720_IMG_7523.jpg
+```
+
+- Output:
+
+```text
+storage/outputs/60d2434796554b48841dfc33a48a609b_output.png
+```
+
+- Debug:
+
+```text
+storage/debug/layout/60d2434796554b48841dfc33a48a609b_render_fit.json
+storage/debug/layout/60d2434796554b48841dfc33a48a609b_render_fit_overlay.png
+```
+
+- Current local PaddleOCR inference failed with `PaddleOCRError` and the route used the existing mock OCR fallback, so those route-level manual outputs verify generation and no obvious image corruption, but not real OCR text quality.
+- Re-rendered existing Step 4C manual web records with the new renderer:
+
+```text
+storage/debug/rendered/manual_step5a_web_rendered.png
+storage/debug/layout/manual_step5a_web_render_fit.json
+storage/debug/layout/manual_step5a_web_render_fit_overlay.png
+```
+
+- Re-rendered existing Step 4C manual manga records with the new renderer:
+
+```text
+storage/debug/rendered/manual_step5a_manga_rendered.png
+storage/debug/layout/manual_step5a_manga_render_fit.json
+storage/debug/layout/manual_step5a_manga_render_fit_overlay.png
+```
+
+- Web re-render showed larger centered text with no obvious overflow or large abnormal region.
+- Manga re-render showed centered text in existing bboxes. Narrow vertical OCR bboxes still produce small horizontal text, which remains out of scope for this step.
+- Render fit JSON and render fit overlay were generated for both manual samples.
+
+### Known Limits
+
+- This step still renders text horizontally.
+- It does not implement vertical Japanese / manga text layout.
+- It does not fit text to bubble shapes; it only fits rectangular bboxes.
+- It does not change OCR, translation, provider behavior, mask, inpaint, frontend, layout detection, region detection, or `block_type`.
+- It does not address logo / brand skip; `trust name` remains a known limit.
