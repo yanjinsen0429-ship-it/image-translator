@@ -263,6 +263,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
     job_id = payload.get("job_id")
     copied_paths, missing_debug_files = collect_artifacts(payload=payload, job_id=job_id, sample_dir=sample_dir)
     records = load_render_fit_records(sample_dir / "render_fit.json")
+    text_group_metrics = collect_text_group_metrics(load_json_payload(sample_dir / "text_groups.json"))
     return build_sample_result(
         sample=sample,
         payload=payload,
@@ -271,6 +272,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
         copied_paths=copied_paths,
         records=records,
         missing_debug_files=missing_debug_files,
+        text_group_metrics=text_group_metrics,
     )
 
 
@@ -318,6 +320,8 @@ def collect_artifacts(
         "region_overlay": layout_dir / f"{job_id}_region_overlay.png",
         "layout_blocks": layout_dir / f"{job_id}_layout_blocks.json",
         "layout_overlay": layout_dir / f"{job_id}_layout_overlay.png",
+        "text_groups": layout_dir / f"{job_id}_text_groups.json",
+        "text_groups_overlay": layout_dir / f"{job_id}_text_groups_overlay.png",
         "mask": PROJECT_ROOT / "storage" / "debug" / "mask" / f"{job_id}_mask.png",
         "inpainted": PROJECT_ROOT / "storage" / "debug" / "inpainted" / f"{job_id}_inpainted.png",
         "rendered": PROJECT_ROOT / "storage" / "debug" / "rendered" / f"{job_id}_rendered.png",
@@ -329,6 +333,8 @@ def collect_artifacts(
         "region_overlay": sample_dir / "region_overlay.png",
         "layout_blocks": sample_dir / "layout_blocks.json",
         "layout_overlay": sample_dir / "layout_overlay.png",
+        "text_groups": sample_dir / "text_groups.json",
+        "text_groups_overlay": sample_dir / "text_groups_overlay.png",
         "mask": sample_dir / "mask.png",
         "inpainted": sample_dir / "inpainted.png",
         "rendered": sample_dir / "rendered.png",
@@ -353,8 +359,10 @@ def build_sample_result(
     missing_debug_files: list[str],
     error_message: str | None = None,
     extra_fail_reasons: list[str] | None = None,
+    text_group_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metrics, skipped_reason_counts = collect_metrics(records)
+    metrics.update(text_group_metrics or empty_text_group_metrics())
     used_mock = used_mock_or_fallback_ocr(payload)
     translation_items = (payload.get("translation_result") or {}).get("items", [])
     suspicious_single = (
@@ -411,6 +419,30 @@ def collect_metrics(records: list[dict[str, Any]]) -> tuple[dict[str, Any], dict
         ),
     }
     return metrics, dict(skipped_reason_counts)
+
+
+def collect_text_group_metrics(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not payload:
+        return empty_text_group_metrics()
+    groups = list(payload.get("groups") or [])
+    group_count = int(payload.get("group_count") or len(groups))
+    grouped_block_count = sum(len(group.get("grouped_block_ids") or []) for group in groups)
+    vertical_group_count = sum(1 for group in groups if group.get("text_direction") == "vertical")
+    return {
+        "group_count": group_count,
+        "grouped_block_count": grouped_block_count,
+        "vertical_group_count": vertical_group_count,
+        "average_blocks_per_group": round(grouped_block_count / group_count, 3) if group_count else 0,
+    }
+
+
+def empty_text_group_metrics() -> dict[str, Any]:
+    return {
+        "group_count": 0,
+        "grouped_block_count": 0,
+        "vertical_group_count": 0,
+        "average_blocks_per_group": 0,
+    }
 
 
 def apply_fail_rules(result: dict[str, Any], records: list[dict[str, Any]]) -> None:
@@ -548,6 +580,7 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
             ("input", sample.get("input")),
             ("output", sample.get("output")),
             ("render_fit_overlay", paths.get("render_fit_overlay")),
+            ("text_groups_overlay", paths.get("text_groups_overlay")),
             ("region_overlay", paths.get("region_overlay")),
             ("layout_overlay", paths.get("layout_overlay")),
             ("mask", paths.get("mask")),
@@ -609,13 +642,18 @@ def report_relative_src(path: Path, report_dir: Path) -> str:
 
 
 def load_render_fit_records(path: Path) -> list[dict[str, Any]]:
+    payload = load_json_payload(path)
+    return list(payload.get("records", []))
+
+
+def load_json_payload(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return []
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    return list(payload.get("records", []))
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def save_png(source: Path, destination: Path) -> None:

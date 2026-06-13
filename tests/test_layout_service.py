@@ -19,6 +19,12 @@ from app.services.region_service import (
     export_region_debug_json,
     export_region_debug_overlay,
 )
+from app.services.text_group_service import (
+    apply_text_groups,
+    build_text_groups,
+    export_text_group_debug_json,
+    export_text_group_debug_overlay,
+)
 
 
 def make_block(
@@ -699,6 +705,245 @@ class LayoutServiceTests(unittest.TestCase):
 
         self.assertEqual(len(layout_blocks), 2)
         self.assertNotEqual(layout_blocks[0].text, "Abuse report")
+
+    def test_text_group_builds_group_from_same_text_region(self) -> None:
+        blocks = [
+            self._layout_block("layout-a", "Line A", (20, 20, 80, 38)),
+            self._layout_block("layout-b", "Line B", (22, 42, 82, 60)),
+        ]
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(10, 10, 110, 80),
+                polygon=[[10, 10], [110, 10], [110, 80], [10, 80]],
+                score=0.9,
+                linked_block_ids=["layout-a", "layout-b"],
+            )
+        ]
+
+        groups = build_text_groups(blocks, regions)
+        grouped_blocks = apply_text_groups(blocks, groups)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].grouped_block_ids, ["layout-a", "layout-b"])
+        self.assertEqual(groups[0].group_bbox, (20, 20, 82, 60))
+        self.assertEqual(groups[0].merged_source_text, "Line A Line B")
+        self.assertEqual(len(grouped_blocks), 1)
+        self.assertEqual(grouped_blocks[0]["id"], "text_group_region-1")
+        self.assertEqual(grouped_blocks[0]["text"], "Line A Line B")
+        self.assertEqual(grouped_blocks[0]["grouped_block_ids"], ["layout-a", "layout-b"])
+
+    def test_text_group_does_not_merge_different_regions_or_unlinked_ui(self) -> None:
+        blocks = [
+            self._layout_block("layout-a", "A", (20, 20, 40, 38)),
+            self._layout_block("layout-b", "B", (120, 20, 140, 38)),
+            self._layout_block("layout-ui", "OK", (10, 100, 40, 120), block_type="button"),
+        ]
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(10, 10, 60, 50),
+                polygon=[[10, 10], [60, 10], [60, 50], [10, 50]],
+                score=0.9,
+                linked_block_ids=["layout-a"],
+            ),
+            TextRegion(
+                id="region-2",
+                region_type="button_like",
+                bbox=(5, 95, 45, 125),
+                polygon=[[5, 95], [45, 95], [45, 125], [5, 125]],
+                score=0.8,
+                linked_block_ids=["layout-ui"],
+            ),
+        ]
+
+        groups = build_text_groups(blocks, regions)
+        grouped_blocks = apply_text_groups(blocks, groups)
+
+        self.assertEqual(groups, [])
+        self.assertEqual([block["id"] for block in grouped_blocks], ["layout-a", "layout-b", "layout-ui"])
+
+    def test_text_group_skips_horizontal_ui_short_label_region(self) -> None:
+        blocks = [
+            self._layout_block("layout-lv", "LV.", (20, 20, 58, 44)),
+            self._layout_block("layout-name", "Salt", (80, 19, 134, 45)),
+            self._layout_block("layout-gold", "240/240", (170, 20, 250, 44)),
+        ]
+        regions = [
+            TextRegion(
+                id="region-ui",
+                region_type="text_box",
+                bbox=(10, 12, 270, 54),
+                polygon=[[10, 12], [270, 12], [270, 54], [10, 54]],
+                score=0.85,
+                linked_block_ids=["layout-lv", "layout-name", "layout-gold"],
+            )
+        ]
+        skipped_candidates: list[dict] = []
+
+        groups = build_text_groups(blocks, regions, skipped_candidates=skipped_candidates)
+
+        self.assertEqual(groups, [])
+        self.assertEqual(skipped_candidates[0]["skipped_reason"], "ui_short_label")
+
+    def test_text_group_skips_unsafe_source_block_types(self) -> None:
+        blocks = [
+            self._layout_block("layout-a", "Line A", (20, 20, 80, 38)),
+            self._layout_block("layout-logo", "Brand", (22, 42, 82, 60), block_type="logo"),
+        ]
+        regions = [
+            TextRegion(
+                id="region-unsafe",
+                region_type="bubble",
+                bbox=(10, 10, 110, 80),
+                polygon=[[10, 10], [110, 10], [110, 80], [10, 80]],
+                score=0.9,
+                linked_block_ids=["layout-a", "layout-logo"],
+            )
+        ]
+        skipped_candidates: list[dict] = []
+
+        groups = build_text_groups(blocks, regions, skipped_candidates=skipped_candidates)
+
+        self.assertEqual(groups, [])
+        self.assertEqual(skipped_candidates[0]["skipped_reason"], "unsafe_block_type")
+
+    def test_text_group_marks_vertical_direction_for_tall_region(self) -> None:
+        blocks = [
+            self._layout_block("layout-a", "A", (40, 20, 58, 50)),
+            self._layout_block("layout-b", "B", (42, 58, 60, 88)),
+        ]
+        regions = [
+            TextRegion(
+                id="region-vertical",
+                region_type="text_box",
+                bbox=(30, 10, 75, 110),
+                polygon=[[30, 10], [75, 10], [75, 110], [30, 110]],
+                score=0.9,
+                linked_block_ids=["layout-a", "layout-b"],
+            )
+        ]
+
+        groups = build_text_groups(blocks, regions)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].text_direction, "vertical")
+
+    def test_text_group_inherits_skipped_render_decision_from_source_block(self) -> None:
+        blocks = [
+            self._layout_block("layout-a", "Line A", (20, 20, 80, 38)),
+            {
+                **self._layout_block("layout-b", "Line B", (22, 42, 82, 60)),
+                "can_render_inline": False,
+                "skipped_reason": "manual_skip",
+            },
+        ]
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(10, 10, 110, 80),
+                polygon=[[10, 10], [110, 10], [110, 80], [10, 80]],
+                score=0.9,
+                linked_block_ids=["layout-a", "layout-b"],
+            )
+        ]
+
+        groups = build_text_groups(blocks, regions)
+        grouped_blocks = apply_text_groups(blocks, groups)
+
+        self.assertEqual(len(groups), 1)
+        self.assertFalse(groups[0].can_render_inline)
+        self.assertEqual(groups[0].skipped_reason, "manual_skip")
+        self.assertFalse(grouped_blocks[0]["can_render_inline"])
+        self.assertEqual(grouped_blocks[0]["skipped_reason"], "manual_skip")
+
+    def test_text_group_debug_json_and_overlay_are_written(self) -> None:
+        blocks = [
+            {
+                **self._layout_block("text_group_region-1", "Line A Line B", (20, 20, 82, 60)),
+                "is_text_group": True,
+                "group_id": "text_group_region-1",
+                "region_id": "region-1",
+                "region_type": "bubble",
+                "text_direction": "horizontal",
+                "grouped_block_ids": ["layout-a", "layout-b"],
+                "source_texts": ["Line A", "Line B"],
+                "merged_source_text": "Line A Line B",
+                "can_render_inline": True,
+                "skipped_reason": None,
+            }
+        ]
+        translation_result = {
+            "items": [
+                {
+                    "block_id": "text_group_region-1",
+                    "translated_text": "合并译文",
+                    "status": "success",
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "input.png"
+            Image.new("RGB", (120, 90), "white").save(image_path)
+            json_path = export_text_group_debug_json(
+                blocks=blocks,
+                translation_result=translation_result,
+                output_path=root / "debug" / "layout" / "job_text_groups.json",
+                job_id="job",
+                skipped_candidates=[
+                    {
+                        "region_id": "region-ui",
+                        "region_type": "text_box",
+                        "linked_block_ids": ["layout-ui-a", "layout-ui-b"],
+                        "source_texts": ["LV.", "240/240"],
+                        "skipped_reason": "ui_short_label",
+                    }
+                ],
+            )
+            overlay_path = export_text_group_debug_overlay(
+                image_path=image_path,
+                blocks=blocks,
+                output_path=root / "debug" / "layout" / "job_text_groups_overlay.png",
+            )
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            overlay_exists = overlay_path.exists()
+
+        self.assertEqual(data["job_id"], "job")
+        self.assertEqual(data["group_count"], 1)
+        self.assertEqual(data["skipped_candidate_count"], 1)
+        self.assertEqual(data["skipped_candidates"][0]["skipped_reason"], "ui_short_label")
+        self.assertEqual(data["groups"][0]["grouped_block_ids"], ["layout-a", "layout-b"])
+        self.assertEqual(data["groups"][0]["translated_text"], "合并译文")
+        self.assertTrue(overlay_exists)
+
+    def _layout_block(
+        self,
+        block_id: str,
+        text: str,
+        bbox: tuple[int, int, int, int],
+        block_type: str = "normal",
+    ) -> dict:
+        x1, y1, x2, y2 = bbox
+        return {
+            "id": block_id,
+            "text": text,
+            "block_type": block_type,
+            "bbox": {
+                "x": x1,
+                "y": y1,
+                "width": x2 - x1,
+                "height": y2 - y1,
+                "points": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+            },
+            "polygon": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+            "confidence": 0.9,
+            "source_block_ids": [block_id],
+        }
 
 
 if __name__ == "__main__":

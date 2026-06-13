@@ -142,6 +142,30 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertEqual(metrics["complex_background_inline_count"], 1)
         self.assertEqual(skipped, {"small_bbox": 1})
 
+    def test_text_group_metrics_are_parsed(self):
+        payload = {
+            "group_count": 2,
+            "groups": [
+                {
+                    "group_id": "text_group_region-1",
+                    "text_direction": "vertical",
+                    "grouped_block_ids": ["a", "b"],
+                },
+                {
+                    "group_id": "text_group_region-2",
+                    "text_direction": "horizontal",
+                    "grouped_block_ids": ["c"],
+                },
+            ],
+        }
+
+        metrics = self.tool.collect_text_group_metrics(payload)
+
+        self.assertEqual(metrics["group_count"], 2)
+        self.assertEqual(metrics["grouped_block_count"], 3)
+        self.assertEqual(metrics["vertical_group_count"], 1)
+        self.assertEqual(metrics["average_blocks_per_group"], 1.5)
+
     def test_mock_or_fallback_ocr_marks_sample_failed(self):
         sample = self.tool.Sample(Path("05_complex_background_small_text.png"), "05_complex_background_small_text")
         payload = {
@@ -307,6 +331,7 @@ class VisualRegressionToolTests(unittest.TestCase):
         self._write_image(sample_dir / "input.png")
         self._write_image(sample_dir / "output.png")
         self._write_image(sample_dir / "render_fit_overlay.png")
+        self._write_image(sample_dir / "text_groups_overlay.png")
         self._write_image(sample_dir / "region_overlay.png")
         self._write_image(sample_dir / "layout_overlay.png")
         self._write_image(sample_dir / "mask.png")
@@ -329,6 +354,7 @@ class VisualRegressionToolTests(unittest.TestCase):
                     "warn_reasons": [],
                     "paths": {
                         "render_fit_overlay": str(sample_dir / "render_fit_overlay.png"),
+                        "text_groups_overlay": str(sample_dir / "text_groups_overlay.png"),
                         "region_overlay": str(sample_dir / "region_overlay.png"),
                         "layout_overlay": str(sample_dir / "layout_overlay.png"),
                         "mask": str(sample_dir / "mask.png"),
@@ -347,6 +373,7 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertIn('src="04_clean_single_bubble/input.png"', html)
         self.assertIn('src="04_clean_single_bubble/output.png"', html)
         self.assertIn('src="04_clean_single_bubble/render_fit_overlay.png"', html)
+        self.assertIn('src="04_clean_single_bubble/text_groups_overlay.png"', html)
         self.assertIn('src="04_clean_single_bubble/region_overlay.png"', html)
         self.assertIn('src="04_clean_single_bubble/layout_overlay.png"', html)
         self.assertIn('src="04_clean_single_bubble/mask.png"', html)

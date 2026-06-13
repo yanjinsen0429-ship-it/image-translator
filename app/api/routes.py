@@ -32,6 +32,12 @@ from app.services.region_service import (
     export_region_debug_json,
     export_region_debug_overlay,
 )
+from app.services.text_group_service import (
+    apply_text_groups,
+    build_text_groups,
+    export_text_group_debug_json,
+    export_text_group_debug_overlay,
+)
 from app.services.translation_service import create_translation_result
 
 router = APIRouter()
@@ -100,6 +106,19 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         )
     except Exception:
         logger.exception("Failed to export debug text regions for job %s", job_id)
+    skipped_text_group_candidates: list[dict] = []
+    try:
+        text_groups = build_text_groups(
+            layout_blocks=translation_input.get("blocks", []),
+            regions=regions,
+            skipped_candidates=skipped_text_group_candidates,
+        )
+        translation_input = {
+            **translation_input,
+            "blocks": apply_text_groups(translation_input.get("blocks", []), text_groups),
+        }
+    except Exception:
+        logger.exception("Failed to group text regions for job %s", job_id)
     translation_input = _with_unsafe_block_guards(translation_input, regions=regions)
     translation_input = _with_renderable_block_decisions(translation_input)
     renderable_input = _with_renderable_blocks_only(translation_input)
@@ -142,6 +161,18 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         renderable_blocks=renderable_input.get("blocks", []),
     )
     try:
+        export_text_group_debug_json(
+            blocks=translation_input.get("blocks", []),
+            translation_result=translation_result,
+            output_path=settings.debug_dir / "layout" / f"{job_id}_text_groups.json",
+            job_id=job_id,
+            skipped_candidates=skipped_text_group_candidates,
+        )
+        export_text_group_debug_overlay(
+            image_path=input_path,
+            blocks=translation_input.get("blocks", []),
+            output_path=settings.debug_dir / "layout" / f"{job_id}_text_groups_overlay.png",
+        )
         render_fit_records = build_render_fit_debug_records(
             layout_blocks=translation_input.get("blocks", []),
             translation_result=translation_result,
@@ -336,13 +367,23 @@ def _unsafe_large_short_text_bbox_reason(
 
 def _block_has_linked_text_region(block: dict, regions: list) -> bool:
     block_id = block.get("id")
+    region_id = block.get("region_id")
+    grouped_block_ids = {str(item) for item in block.get("grouped_block_ids", [])}
     if block_id is None:
-        return False
+        block_id = ""
     for region in regions:
+        current_region_id = getattr(region, "id", None)
+        if current_region_id is None and isinstance(region, dict):
+            current_region_id = region.get("id")
+        if region_id is not None and str(region_id) == str(current_region_id):
+            return True
+
         linked_block_ids = getattr(region, "linked_block_ids", None)
         if linked_block_ids is None and isinstance(region, dict):
             linked_block_ids = region.get("linked_block_ids")
         if linked_block_ids and str(block_id) in {str(item) for item in linked_block_ids}:
+            return True
+        if linked_block_ids and grouped_block_ids.intersection({str(item) for item in linked_block_ids}):
             return True
     return False
 

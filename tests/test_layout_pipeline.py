@@ -4,6 +4,7 @@ import copy
 import json
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from PIL import Image
 
 from app.api.routes import translate_image
 from app.services.layout_service import export_layout_debug_overlay
+from app.services.region_service import TextRegion
 from app.services.translation_service import MockTranslationProvider
 
 
@@ -549,6 +551,84 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertFalse(skipped_record["whether_used_for_render"])
         self.assertIn("short_text_large_bbox", skipped_record["debug_notes"])
 
+    def test_pipeline_groups_region_blocks_for_translation_mask_and_render(self) -> None:
+        captured_translation: dict = {}
+        captured_mask: dict = {}
+        captured_render: dict = {}
+
+        def fake_debug_mask(**kwargs) -> Path:
+            captured_mask["ocr_result"] = kwargs["ocr_result"]
+            mask_path = kwargs["debug_mask_dir"] / f"{kwargs['image_id']}_mask.png"
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (180, 120), 255).save(mask_path)
+            return mask_path
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            captured_render["items"] = translation_items
+            return self._fake_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=debug_rendered_dir,
+                image_id=image_id,
+            )
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            captured_translation["ocr_result"] = ocr_result
+            return self._make_translation_result(job_id, ocr_result)
+
+        regions = [
+            TextRegion(
+                id="region-1",
+                region_type="bubble",
+                bbox=(10, 10, 150, 90),
+                polygon=[[10, 10], [150, 10], [150, 90], [10, 90]],
+                score=0.9,
+                linked_block_ids=["layout_left", "layout_right"],
+            )
+        ]
+
+        result, root = self._run_route_with_valid_image_size(
+            image_size=(180, 120),
+            fake_ocr_result={
+                "job_id": "job-layout",
+                "image_width": 180,
+                "image_height": 120,
+                "blocks": [
+                    self._make_ocr_block("left", "Left", (20, 30, 60, 50)),
+                    self._make_ocr_block("right", "Right", (90, 32, 135, 52)),
+                ],
+                "raw": {"mode": "test"},
+                "warnings": [],
+            },
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=fake_debug_rendered,
+            mask_side_effect=fake_debug_mask,
+            regions_return_value=regions,
+        )
+
+        translation_blocks = captured_translation["ocr_result"]["blocks"]
+        mask_blocks = captured_mask["ocr_result"]["blocks"]
+        render_items = captured_render["items"]
+        text_groups_json_path = root / "debug" / "layout" / f"{result['job_id']}_text_groups.json"
+        text_groups_overlay_path = root / "debug" / "layout" / f"{result['job_id']}_text_groups_overlay.png"
+        group_data = json.loads(text_groups_json_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([block["id"] for block in translation_blocks], ["text_group_region-1"])
+        self.assertEqual(translation_blocks[0]["text"], "Left Right")
+        self.assertEqual(translation_blocks[0]["grouped_block_ids"], ["layout_left", "layout_right"])
+        self.assertEqual([block["id"] for block in mask_blocks], ["text_group_region-1"])
+        self.assertEqual([item["block_id"] for item in render_items], ["text_group_region-1"])
+        self.assertTrue(text_groups_overlay_path.exists())
+        self.assertEqual(group_data["group_count"], 1)
+        self.assertEqual(group_data["groups"][0]["merged_source_text"], "Left Right")
+        self.assertTrue(group_data["groups"][0]["whether_used_for_mask"])
+        self.assertTrue(group_data["groups"][0]["whether_used_for_render"])
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -581,6 +661,7 @@ class LayoutPipelineTests(unittest.TestCase):
         translation_side_effect,
         rendered_side_effect,
         mask_side_effect,
+        regions_return_value=None,
     ) -> tuple[dict, Path]:
         class FakeUpload:
             filename = "sample.png"
@@ -603,7 +684,7 @@ class LayoutPipelineTests(unittest.TestCase):
         inpainted_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", image_size, (200, 200, 200)).save(inpainted_path)
 
-        with (
+        patches = [
             patch("app.api.routes.settings", fake_settings),
             patch("app.services.file_service.settings", fake_settings),
             patch("app.api.routes.create_ocr_result", return_value=fake_ocr_result),
@@ -611,7 +692,13 @@ class LayoutPipelineTests(unittest.TestCase):
             patch("app.api.routes.InpaintingService.export_debug_mask", side_effect=mask_side_effect),
             patch("app.api.routes.InpaintingService.export_debug_inpainted", return_value=inpainted_path),
             patch("app.api.routes.RenderingService.export_debug_rendered", side_effect=rendered_side_effect),
-        ):
+        ]
+        if regions_return_value is not None:
+            patches.append(patch("app.api.routes.detect_text_regions", return_value=regions_return_value))
+
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
             return asyncio.run(translate_image(FakeUpload())), root_path
 
     def _run_route_with_valid_image(
