@@ -101,6 +101,8 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     except Exception:
         logger.exception("Failed to export debug text regions for job %s", job_id)
     translation_input = _with_unsafe_block_guards(translation_input, regions=regions)
+    translation_input = _with_renderable_block_decisions(translation_input)
+    renderable_input = _with_renderable_blocks_only(translation_input)
     try:
         export_layout_debug_json(
             blocks=translation_input.get("blocks", []),
@@ -114,9 +116,8 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     inpainted_path = None
     try:
         inpainting_service = InpaintingService()
-        image_processing_input = _without_ignored_blocks(translation_input)
         mask_path = inpainting_service.export_debug_mask(
-            ocr_result=image_processing_input,
+            ocr_result=renderable_input,
             image_path=input_path,
             debug_mask_dir=settings.debug_dir / "mask",
             image_id=job_id,
@@ -136,9 +137,9 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         ocr_result=translation_input,
     )
     translation_result = _without_skipped_translation_items(translation_result)
-    render_translation_result = _without_unrenderable_translation_items(
+    render_translation_result = _translation_result_for_renderable_blocks(
         translation_result=translation_result,
-        ocr_result=translation_input,
+        renderable_blocks=renderable_input.get("blocks", []),
     )
     try:
         render_fit_records = build_render_fit_debug_records(
@@ -200,30 +201,61 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
     }
 
 
-def _without_ignored_blocks(ocr_result: dict) -> dict:
+def _with_renderable_block_decisions(ocr_result: dict) -> dict:
+    return {
+        **ocr_result,
+        "blocks": [
+            _with_renderable_block_decision(block)
+            for block in ocr_result.get("blocks", [])
+        ],
+    }
+
+
+def _with_renderable_block_decision(block: dict) -> dict:
+    skipped_reason = _renderable_skip_reason(block)
+    return {
+        **block,
+        "can_render_inline": skipped_reason is None,
+        "skipped_reason": skipped_reason,
+    }
+
+
+def _renderable_skip_reason(block: dict) -> str | None:
+    if block.get("can_render_inline") is False:
+        return (
+            block.get("skipped_reason")
+            or block.get("render_skip_reason")
+            or block.get("image_processing_skip_reason")
+            or "render_inline_disabled"
+        )
+    if block.get("block_type") in {"ignored", "logo"}:
+        return f"block_type={block.get('block_type')}"
+    return block.get("skipped_reason") or block.get("render_skip_reason") or block.get("image_processing_skip_reason")
+
+
+def _with_renderable_blocks_only(ocr_result: dict) -> dict:
     return {
         **ocr_result,
         "blocks": [
             block
             for block in ocr_result.get("blocks", [])
-            if block.get("block_type") != "ignored"
-            and not block.get("image_processing_skip_reason")
+            if block.get("can_render_inline") is True
         ],
     }
 
 
-def _without_unrenderable_translation_items(translation_result: dict, ocr_result: dict) -> dict:
-    skipped_block_ids = {
+def _translation_result_for_renderable_blocks(translation_result: dict, renderable_blocks: list[dict]) -> dict:
+    renderable_block_ids = {
         str(block.get("id"))
-        for block in ocr_result.get("blocks", [])
-        if block.get("render_skip_reason")
+        for block in renderable_blocks
+        if block.get("id") is not None
     }
     return {
         **translation_result,
         "items": [
             item
             for item in translation_result.get("items", [])
-            if str(item.get("block_id")) not in skipped_block_ids
+            if str(item.get("block_id")) in renderable_block_ids
         ],
     }
 

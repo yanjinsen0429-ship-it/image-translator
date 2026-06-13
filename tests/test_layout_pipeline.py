@@ -524,14 +524,29 @@ class LayoutPipelineTests(unittest.TestCase):
         )
 
         mask_texts = [block["text"] for block in captured_mask["ocr_result"]["blocks"]]
+        mask_block_ids = [block["id"] for block in captured_mask["ocr_result"]["blocks"]]
         render_texts = [item["source_text"] for item in captured_render["items"]]
+        render_block_ids = [item["block_id"] for item in captured_render["items"]]
         render_fit_json_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
         render_fit_data = json.loads(render_fit_json_path.read_text(encoding="utf-8"))
-        skipped_record = next(record for record in render_fit_data["records"] if record["original_text"] == "CM")
+        records_by_text = {record["original_text"]: record for record in render_fit_data["records"]}
+        skipped_record = records_by_text["CM"]
+        rendered_record = records_by_text["real text"]
 
         self.assertEqual(mask_texts, ["real text"])
         self.assertEqual(render_texts, ["real text"])
+        self.assertEqual(mask_block_ids, render_block_ids)
+        self.assertTrue(captured_mask["ocr_result"]["blocks"][0]["can_render_inline"])
+        self.assertTrue(rendered_record["can_render_inline"])
+        self.assertIsNone(rendered_record["skipped_reason"])
+        self.assertTrue(rendered_record["whether_used_for_mask"])
+        self.assertTrue(rendered_record["whether_used_for_inpaint"])
+        self.assertTrue(rendered_record["whether_used_for_render"])
+        self.assertFalse(skipped_record["can_render_inline"])
         self.assertEqual(skipped_record["skipped_reason"], "short_text_large_bbox")
+        self.assertFalse(skipped_record["whether_used_for_mask"])
+        self.assertFalse(skipped_record["whether_used_for_inpaint"])
+        self.assertFalse(skipped_record["whether_used_for_render"])
         self.assertIn("short_text_large_bbox", skipped_record["debug_notes"])
 
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:

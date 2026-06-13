@@ -97,7 +97,8 @@ def _render_fit_record(
     original_text_length = len(original_text)
     translated_text_length = len(translated_text or "")
     density = translated_text_length / area if area > 0 else 0.0
-    skipped_reason = block.get("render_skip_reason") or block.get("image_processing_skip_reason")
+    skipped_reason = block.get("skipped_reason") or block.get("render_skip_reason") or block.get("image_processing_skip_reason")
+    can_render_inline = _can_render_inline(block=block, skipped_reason=skipped_reason)
     layout = None
     min_font_size = 10 if block_type == "button" else 12
     max_font_size = max(min_font_size, min(72, int(max(1.0, height) * 0.9)))
@@ -150,12 +151,24 @@ def _render_fit_record(
         "is_font_too_small": is_font_too_small,
         "possible_underfilled_bbox": possible_underfilled_bbox,
         "possible_overflow": possible_overflow,
+        "can_render_inline": can_render_inline,
         "skipped_reason": skipped_reason,
-        "enters_render": skipped_reason is None,
+        "whether_used_for_mask": can_render_inline,
+        "whether_used_for_inpaint": can_render_inline,
+        "whether_used_for_render": can_render_inline,
+        "enters_render": can_render_inline,
         "image_processing_skip_reason": block.get("image_processing_skip_reason"),
-        "enters_image_processing": block.get("image_processing_skip_reason") is None,
+        "enters_image_processing": can_render_inline,
         "debug_notes": debug_notes,
     }
+
+
+def _can_render_inline(block: dict[str, Any], skipped_reason: Any) -> bool:
+    if block.get("can_render_inline") is False:
+        return False
+    if block.get("block_type") in {"ignored", "logo"}:
+        return False
+    return skipped_reason is None
 
 
 def _translation_items_by_block_id(translation_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
