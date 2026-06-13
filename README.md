@@ -56,11 +56,33 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-PaddleOCR 需要单独安装 PaddlePaddle CPU 版：
+PaddleOCR 运行时依赖已经在 `requirements.txt` 中固定版本，不需要再单独安装 PaddlePaddle。
 
-```powershell
-python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+Windows CPU 已验证组合：
+
+```text
+Python 3.11.9
+paddleocr==3.2.0
+paddlepaddle==3.1.1
+paddlex==3.2.1
+compiled with cuda: False
 ```
+
+不要随意升级 PaddleOCR 运行时依赖。以下组合已知会在 Windows CPU 环境触发 PaddleOCR inference 错误：
+
+```text
+paddleocr==3.6.0
+paddlepaddle==3.3.1
+paddlex==3.6.1
+```
+
+典型错误：
+
+```text
+NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]
+```
+
+如果出现该错误，请回退到 `requirements.txt` 中固定的版本组合。
 
 首次运行 PaddleOCR 时可能会下载模型。默认 OCR 语言为 `ch`，更适合中英混合图片；如果强制使用英文模型，可以设置：
 

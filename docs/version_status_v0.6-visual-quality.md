@@ -1229,3 +1229,77 @@ Coverage added:
 - The tool is a regression aid, not an aesthetic judge.
 - It does not modify rendering, render-fit, OCR, translation, provider, frontend, mask, or inpaint behavior.
 - It does not continue or restore the reverted Step 5B / 5B-hotfix work.
+
+## Step 5E Pin PaddleOCR Runtime Versions
+
+### Goal
+
+Pin the PaddleOCR runtime dependency versions that were verified locally on Windows CPU.
+
+This step is dependency and documentation only. It does not change business logic, OCR provider code, translation providers, frontend, rendering, mask, inpaint, visual-regression scripts, or sample files.
+
+### Verified Runtime
+
+The current verified local OCR runtime is:
+
+```text
+Python 3.11.9
+paddleocr==3.2.0
+paddlepaddle==3.1.1
+paddlex==3.2.1
+compiled with cuda: False
+```
+
+`requirements.txt` now pins:
+
+```text
+paddleocr==3.2.0
+paddlepaddle==3.1.1
+paddlex==3.2.1
+```
+
+### Known Bad Runtime
+
+The following Windows CPU combination is known to fail during PaddleOCR inference:
+
+```text
+paddleocr==3.6.0
+paddlepaddle==3.3.1
+paddlex==3.6.1
+```
+
+Known failure:
+
+```text
+NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]
+```
+
+If this error appears, reinstall the pinned runtime versions from `requirements.txt`.
+
+### Visual Regression Note
+
+Visual regression results are only valid when real OCR runs successfully.
+
+If PaddleOCR inference fails and the backend uses fallback / mock OCR, the result must be treated as invalid for visual quality verification. The visual-regression tool should mark fallback / mock OCR as `FAIL`.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 150 tests
+OK
+```
+
+### Known Limits
+
+- This step does not change PaddleOCR adapter logic.
+- This step does not add WebP support to PaddleOCR.
+- This step does not modify OCR, translation, frontend, mask, inpaint, render, layout, text grouping, or UI guard behavior.
+- `storage/debug/pip_freeze_before_ocr_fix.txt` is a local debug reference and is not committed.
