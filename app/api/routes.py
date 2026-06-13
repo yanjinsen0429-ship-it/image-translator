@@ -1,8 +1,10 @@
 import logging
+import re
 import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from PIL import Image
 
 from app.core.config import settings
 from app.models.schemas import ImageProcessResult
@@ -77,6 +79,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         job_id=job_id,
     )
     ocr_result = create_ocr_result(image_path=input_path, job_id=job_id)
+    ocr_result = _with_image_size_from_file(ocr_result, input_path)
     translation_input = _create_translation_input_from_layout(ocr_result)
     try:
         export_layout_debug_overlay(
@@ -106,6 +109,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         )
     except Exception:
         logger.exception("Failed to export debug text regions for job %s", job_id)
+    translation_input = _with_ui_screen_guards(translation_input, regions=regions)
     skipped_text_group_candidates: list[dict] = []
     try:
         text_groups = build_text_groups(
@@ -121,6 +125,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         logger.exception("Failed to group text regions for job %s", job_id)
     translation_input = _with_unsafe_block_guards(translation_input, regions=regions)
     translation_input = _with_renderable_block_decisions(translation_input)
+    translatable_input = _with_translatable_blocks_only(translation_input)
     renderable_input = _with_renderable_blocks_only(translation_input)
     try:
         export_layout_debug_json(
@@ -153,7 +158,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
 
     translation_result = create_translation_result(
         job_id=job_id,
-        ocr_result=translation_input,
+        ocr_result=translatable_input,
     )
     translation_result = _without_skipped_translation_items(translation_result)
     render_translation_result = _translation_result_for_renderable_blocks(
@@ -244,14 +249,34 @@ def _with_renderable_block_decisions(ocr_result: dict) -> dict:
 
 def _with_renderable_block_decision(block: dict) -> dict:
     skipped_reason = _renderable_skip_reason(block)
+    can_translate = block.get("can_translate", skipped_reason is None)
+    can_mask = block.get("can_mask", skipped_reason is None)
+    can_inpaint = block.get("can_inpaint", can_mask)
+    can_render = block.get("can_render", skipped_reason is None)
+    can_group = block.get("can_group", skipped_reason is None)
     return {
         **block,
-        "can_render_inline": skipped_reason is None,
+        "block_role": block.get("block_role") or _default_block_role(block),
+        "ui_screen_mode": bool(block.get("ui_screen_mode")),
+        "ui_like": bool(block.get("ui_like")),
+        "can_translate": bool(can_translate),
+        "can_mask": bool(can_mask),
+        "can_inpaint": bool(can_inpaint),
+        "can_render": bool(can_render),
+        "can_group": bool(can_group),
+        "can_render_inline": bool(can_render) and skipped_reason is None,
         "skipped_reason": skipped_reason,
     }
 
 
 def _renderable_skip_reason(block: dict) -> str | None:
+    if block.get("can_render") is False:
+        return (
+            block.get("skipped_reason")
+            or block.get("render_skip_reason")
+            or block.get("image_processing_skip_reason")
+            or "render_inline_disabled"
+        )
     if block.get("can_render_inline") is False:
         return (
             block.get("skipped_reason")
@@ -264,13 +289,29 @@ def _renderable_skip_reason(block: dict) -> str | None:
     return block.get("skipped_reason") or block.get("render_skip_reason") or block.get("image_processing_skip_reason")
 
 
+def _with_translatable_blocks_only(ocr_result: dict) -> dict:
+    return {
+        **ocr_result,
+        "blocks": [
+            block
+            for block in ocr_result.get("blocks", [])
+            if block.get("can_translate") is not False
+        ],
+    }
+
+
 def _with_renderable_blocks_only(ocr_result: dict) -> dict:
     return {
         **ocr_result,
         "blocks": [
             block
             for block in ocr_result.get("blocks", [])
-            if block.get("can_render_inline") is True
+            if (
+                block.get("can_render_inline") is True
+                and block.get("can_mask") is not False
+                and block.get("can_inpaint") is not False
+                and block.get("can_render") is not False
+            )
         ],
     }
 
@@ -300,6 +341,254 @@ def _without_skipped_translation_items(translation_result: dict) -> dict:
             if item.get("status") != "skipped"
         ],
     }
+
+
+def _with_ui_screen_guards(ocr_result: dict, regions: list | None = None) -> dict:
+    image_size = _ocr_image_size(ocr_result)
+    if image_size is None:
+        return {
+            **ocr_result,
+            "blocks": [_with_default_decision_fields(block, ui_screen_mode=False) for block in ocr_result.get("blocks", [])],
+        }
+
+    blocks = ocr_result.get("blocks", [])
+    ui_screen_mode = _is_ui_screen(blocks=blocks, image_size=image_size, regions=regions or [])
+    return {
+        **ocr_result,
+        "blocks": [
+            _with_ui_block_decision(
+                block=block,
+                image_size=image_size,
+                ui_screen_mode=ui_screen_mode,
+                regions=regions or [],
+            )
+            for block in blocks
+        ],
+        "raw": {
+            **(ocr_result.get("raw") or {}),
+            "ui_screen_mode": ui_screen_mode,
+        },
+    }
+
+
+def _with_ui_block_decision(
+    block: dict,
+    image_size: tuple[int, int],
+    ui_screen_mode: bool,
+    regions: list,
+) -> dict:
+    if not ui_screen_mode or block.get("is_text_group") or _block_has_manga_region(block, regions):
+        return _with_default_decision_fields(block, ui_screen_mode=ui_screen_mode)
+
+    role = _ui_block_role(block, image_size)
+    if role is None:
+        return _with_default_decision_fields(block, ui_screen_mode=ui_screen_mode)
+
+    return {
+        **block,
+        "block_role": role,
+        "ui_screen_mode": ui_screen_mode,
+        "ui_like": True,
+        "can_translate": False,
+        "can_mask": False,
+        "can_inpaint": False,
+        "can_render": False,
+        "can_group": False,
+        "can_render_inline": False,
+        "skipped_reason": role,
+        "image_processing_skip_reason": role,
+        "render_skip_reason": role,
+    }
+
+
+def _with_default_decision_fields(block: dict, ui_screen_mode: bool) -> dict:
+    return {
+        **block,
+        "block_role": block.get("block_role") or _default_block_role(block),
+        "ui_screen_mode": ui_screen_mode,
+        "ui_like": bool(block.get("ui_like")),
+        "can_translate": block.get("can_translate", block.get("block_type") not in {"ignored", "logo"}),
+        "can_mask": block.get("can_mask", True),
+        "can_inpaint": block.get("can_inpaint", True),
+        "can_render": block.get("can_render", True),
+        "can_group": block.get("can_group", True),
+    }
+
+
+def _default_block_role(block: dict) -> str:
+    if block.get("is_text_group"):
+        return "manga_text_group"
+    block_type = str(block.get("block_type") or "")
+    if block_type in {"button", "logo", "ignored"}:
+        return block_type
+    return "text"
+
+
+def _is_ui_screen(blocks: list[dict], image_size: tuple[int, int], regions: list) -> bool:
+    if len(blocks) < 6:
+        return False
+    if _has_manga_regions(regions):
+        return False
+
+    ui_role_count = 0
+    edge_small_count = 0
+    for block in blocks:
+        if _ui_block_role(block, image_size) is not None:
+            ui_role_count += 1
+        if _is_edge_small_block(block, image_size):
+            edge_small_count += 1
+
+    block_count = max(1, len(blocks))
+    return (
+        ui_role_count >= 5
+        and ui_role_count / block_count >= 0.5
+        and edge_small_count >= 4
+    )
+
+
+def _has_manga_regions(regions: list) -> bool:
+    for region in regions:
+        region_type = str(_region_value(region, "region_type") or "unknown")
+        if region_type == "bubble":
+            return True
+        if region_type in {"caption_box", "text_box"}:
+            bbox = _region_value(region, "bbox")
+            if bbox is None:
+                continue
+            x1, y1, x2, y2 = _normalize_bbox_tuple(bbox)
+            width = max(0.0, x2 - x1)
+            height = max(0.0, y2 - y1)
+            if height >= width * 1.25 or (width * height) >= 30000:
+                return True
+    return False
+
+
+def _block_has_manga_region(block: dict, regions: list) -> bool:
+    region_id = block.get("region_id")
+    linked_region_ids = {str(item) for item in block.get("linked_region_ids", [])}
+    for region in regions:
+        current_region_id = _region_value(region, "id")
+        region_type = str(_region_value(region, "region_type") or "unknown")
+        if region_type not in {"bubble", "caption_box", "text_box"}:
+            continue
+        if region_type == "text_box":
+            bbox = _region_value(region, "bbox")
+            if bbox is not None:
+                x1, y1, x2, y2 = _normalize_bbox_tuple(bbox)
+                width = max(0.0, x2 - x1)
+                height = max(0.0, y2 - y1)
+                if height < width * 1.25 and (width * height) < 30000:
+                    continue
+        if region_id is not None and str(region_id) == str(current_region_id):
+            return True
+        if current_region_id is not None and str(current_region_id) in linked_region_ids:
+            return True
+    return False
+
+
+def _ui_block_role(block: dict, image_size: tuple[int, int]) -> str | None:
+    block_type = str(block.get("block_type") or "normal")
+    if block_type == "ignored":
+        return None
+
+    text = _clean_block_text(block)
+    if not text:
+        return None
+    if len(text) > 32:
+        return None
+    if block_type == "button":
+        return "ui_button_label"
+
+    bbox = _block_bbox(block)
+    if bbox is None:
+        return None
+    image_width, image_height = image_size
+    x1, y1, x2, y2 = bbox
+    center_y = (y1 + y2) / 2.0
+    width = max(0.0, x2 - x1)
+    height = max(0.0, y2 - y1)
+    top_band = center_y <= image_height * 0.24
+    bottom_band = center_y >= image_height * 0.76
+
+    if _is_resource_number(text):
+        return "ui_resource_number"
+    if top_band and _is_player_or_level_text(text):
+        return "ui_player_name"
+    if _is_status_number(text):
+        return "ui_status_number"
+    if bottom_band and _is_short_label_text(text):
+        return "ui_nav_label"
+    if _is_button_label_text(text):
+        return "ui_button_label"
+    if (
+        _is_short_label_text(text)
+        and width <= image_width * 0.22
+        and height <= image_height * 0.18
+    ):
+        return "ui_icon_label"
+    if _is_short_label_text(text) and (top_band or bottom_band):
+        return "ui_short_label"
+    return None
+
+
+def _is_edge_small_block(block: dict, image_size: tuple[int, int]) -> bool:
+    bbox = _block_bbox(block)
+    if bbox is None:
+        return False
+    image_width, image_height = image_size
+    x1, y1, x2, y2 = bbox
+    width = max(0.0, x2 - x1)
+    height = max(0.0, y2 - y1)
+    center_y = (y1 + y2) / 2.0
+    near_edge = center_y <= image_height * 0.28 or center_y >= image_height * 0.72
+    return near_edge and width <= image_width * 0.35 and height <= image_height * 0.2
+
+
+def _clean_block_text(block: dict) -> str:
+    return " ".join(str(block.get("text") or "").split())
+
+
+def _is_resource_number(text: str) -> bool:
+    clean = text.replace(" ", "")
+    return bool(
+        re.fullmatch(r"(?:\d{1,3}(?:,\d{3})+|\d+/\d+)(?:\d{1,3}(?:,\d{3})+|\d+/\d+)*", clean)
+    )
+
+
+def _is_status_number(text: str) -> bool:
+    return bool(re.fullmatch(r"(?:LV\.?\s*)?\d+(?:[:.%]\d+)?%?", text.strip(), flags=re.IGNORECASE))
+
+
+def _is_player_or_level_text(text: str) -> bool:
+    clean = text.strip()
+    if re.fullmatch(r"LV\.?\s*\d+", clean, flags=re.IGNORECASE):
+        return True
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{2,15}", clean))
+
+
+def _is_short_label_text(text: str) -> bool:
+    clean = text.strip()
+    return 1 <= len(clean) <= 12 and "\n" not in clean
+
+
+def _is_button_label_text(text: str) -> bool:
+    return text.strip().lower() in {"start", "ok", "go", "yes", "no", "play", "claim"}
+
+
+def _region_value(region, key: str):
+    if isinstance(region, dict):
+        return region.get(key)
+    return getattr(region, key, None)
+
+
+def _normalize_bbox_tuple(bbox) -> tuple[float, float, float, float]:
+    if isinstance(bbox, dict):
+        x = float(bbox.get("x") or 0)
+        y = float(bbox.get("y") or 0)
+        return (x, y, x + float(bbox.get("width") or 0), y + float(bbox.get("height") or 0))
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    return (0.0, 0.0, 0.0, 0.0)
 
 
 def _with_unsafe_block_guards(ocr_result: dict, regions: list | None = None) -> dict:
@@ -422,6 +711,21 @@ def _ocr_image_size(ocr_result: dict) -> tuple[int, int] | None:
     if width and height:
         return int(width), int(height)
     return None
+
+
+def _with_image_size_from_file(ocr_result: dict, image_path: Path) -> dict:
+    if _ocr_image_size(ocr_result) is not None:
+        return ocr_result
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+    except Exception:
+        return ocr_result
+    return {
+        **ocr_result,
+        "image_width": width,
+        "image_height": height,
+    }
 
 
 def _block_bbox(block: dict) -> tuple[float, float, float, float] | None:

@@ -52,7 +52,12 @@ def build_text_groups(
         linked_blocks = [blocks_by_id[block_id] for block_id in linked_ids]
         unsafe_blocks = [block for block in linked_blocks if not _is_groupable_block(block)]
         if unsafe_blocks:
-            _append_skipped_candidate(skipped_candidates, region, linked_blocks, "unsafe_block_type")
+            _append_skipped_candidate(
+                skipped_candidates,
+                region,
+                linked_blocks,
+                _source_blocks_skipped_reason(unsafe_blocks) or "unsafe_block_type",
+            )
             continue
 
         candidate_blocks = linked_blocks
@@ -209,6 +214,14 @@ def _group_to_block(group: TextGroup, layout_blocks: list[dict[str, Any]]) -> di
         "source_texts": group.source_texts,
         "merged_source_text": group.merged_source_text,
         "can_render_inline": group.can_render_inline,
+        "can_translate": group.skipped_reason is None,
+        "can_mask": group.can_render_inline,
+        "can_inpaint": group.can_render_inline,
+        "can_render": group.can_render_inline,
+        "can_group": True,
+        "block_role": "manga_text_group",
+        "ui_screen_mode": False,
+        "ui_like": False,
         "skipped_reason": group.skipped_reason,
     }
 
@@ -230,6 +243,13 @@ def _text_group_debug_record(
         "merged_source_text": block.get("merged_source_text") or block.get("text"),
         "translated_text": translation_item.get("translated_text") if translation_item else None,
         "can_render_inline": can_render_inline,
+        "can_translate": block.get("can_translate", can_render_inline),
+        "can_mask": block.get("can_mask", can_render_inline),
+        "can_inpaint": block.get("can_inpaint", can_render_inline),
+        "can_render": block.get("can_render", can_render_inline),
+        "block_role": block.get("block_role") or "manga_text_group",
+        "ui_screen_mode": bool(block.get("ui_screen_mode")),
+        "ui_like": bool(block.get("ui_like")),
         "skipped_reason": block.get("skipped_reason"),
         "whether_used_for_mask": can_render_inline,
         "whether_used_for_inpaint": can_render_inline,
@@ -238,6 +258,8 @@ def _text_group_debug_record(
 
 
 def _is_groupable_block(block: dict[str, Any]) -> bool:
+    if block.get("can_group") is False:
+        return False
     return block.get("block_type") not in {"ignored", "logo", "button"}
 
 

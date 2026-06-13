@@ -409,8 +409,9 @@ def _layout_block_debug_record(
     height = bbox_height(bbox)
     block_type = str(block.get("block_type") or "normal")
     is_ignored = block_type == "ignored"
-    skip_translation = block_type in {"logo", "ignored"}
+    skip_translation = block.get("can_translate") is False or block_type in {"logo", "ignored"}
     linked_region_ids = _linked_region_ids(block, regions)
+    image_processing_skip_reason = block.get("image_processing_skip_reason") or block.get("skipped_reason")
     return {
         "index": index,
         "id": block.get("id"),
@@ -426,9 +427,21 @@ def _layout_block_debug_record(
         "is_ignored": is_ignored,
         "raw_keys": sorted(str(key) for key in block.keys()),
         "enters_translation": not skip_translation,
-        "translation_skip_reason": f"block_type={block_type}" if skip_translation else None,
-        "enters_image_processing": None,
-        "image_processing_note": "Current mask/inpaint/render flow does not consume layout block_type.",
+        "translation_skip_reason": (
+            block.get("skipped_reason")
+            or (f"block_type={block_type}" if skip_translation else None)
+        ),
+        "block_role": block.get("block_role"),
+        "ui_screen_mode": bool(block.get("ui_screen_mode")),
+        "ui_like": bool(block.get("ui_like")),
+        "can_translate": block.get("can_translate", not skip_translation),
+        "can_mask": block.get("can_mask"),
+        "can_inpaint": block.get("can_inpaint"),
+        "can_render": block.get("can_render"),
+        "can_group": block.get("can_group"),
+        "skipped_reason": block.get("skipped_reason"),
+        "enters_image_processing": block.get("can_mask") is not False and image_processing_skip_reason is None,
+        "image_processing_note": image_processing_skip_reason,
         "linked_region_ids": linked_region_ids,
         "nearby_blocks": _nearby_debug_records(block, index, all_blocks),
         "debug_notes": _debug_notes_for_block(block_type, linked_region_ids),

@@ -629,6 +629,204 @@ class LayoutPipelineTests(unittest.TestCase):
         self.assertTrue(group_data["groups"][0]["whether_used_for_mask"])
         self.assertTrue(group_data["groups"][0]["whether_used_for_render"])
 
+    def test_pipeline_protects_ui_screen_short_blocks_from_translation_mask_group_and_render(self) -> None:
+        captured_translation: dict = {}
+        captured_mask: dict = {}
+        captured_render: dict = {}
+
+        def fake_debug_mask(**kwargs) -> Path:
+            captured_mask["ocr_result"] = kwargs["ocr_result"]
+            mask_path = kwargs["debug_mask_dir"] / f"{kwargs['image_id']}_mask.png"
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (300, 180), 255).save(mask_path)
+            return mask_path
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            captured_render["items"] = translation_items
+            return self._fake_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=debug_rendered_dir,
+                image_id=image_id,
+            )
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            captured_translation["ocr_result"] = copy.deepcopy(ocr_result)
+            return self._make_translation_result(job_id, ocr_result)
+
+        regions = [
+            TextRegion(
+                id="ui-region",
+                region_type="text_box",
+                bbox=(10, 6, 160, 32),
+                polygon=[[10, 6], [160, 6], [160, 32], [10, 32]],
+                score=0.72,
+                linked_block_ids=["layout_player", "layout_level"],
+            )
+        ]
+
+        fake_ocr_without_size = {
+            key: value
+            for key, value in self._make_game_ui_ocr_result().items()
+            if key not in {"image_width", "image_height"}
+        }
+
+        result, root = self._run_route_with_valid_image_size(
+            image_size=(300, 180),
+            fake_ocr_result=fake_ocr_without_size,
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=fake_debug_rendered,
+            mask_side_effect=fake_debug_mask,
+            regions_return_value=regions,
+        )
+
+        translated_texts = [block["text"] for block in captured_translation["ocr_result"]["blocks"]]
+        mask_texts = [block["text"] for block in captured_mask["ocr_result"]["blocks"]]
+        render_texts = [item["source_text"] for item in captured_render["items"]]
+        self.assertEqual(translated_texts, ["Welcome to the event briefing"])
+        self.assertEqual(mask_texts, translated_texts)
+        self.assertEqual(render_texts, translated_texts)
+
+        layout_debug_path = root / "debug" / "layout" / f"{result['job_id']}_layout_blocks.json"
+        render_fit_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
+        text_groups_path = root / "debug" / "layout" / f"{result['job_id']}_text_groups.json"
+        layout_data = json.loads(layout_debug_path.read_text(encoding="utf-8"))
+        render_fit_data = json.loads(render_fit_path.read_text(encoding="utf-8"))
+        text_groups_data = json.loads(text_groups_path.read_text(encoding="utf-8"))
+
+        debug_by_text = {block["text"]: block for block in layout_data["blocks"]}
+        fit_by_text = {record["original_text"]: record for record in render_fit_data["records"]}
+        expected_skips = {
+            "CommanderSalt": "ui_player_name",
+            "LV. 90": "ui_player_name",
+            "240/240 322,075,156": "ui_resource_number",
+            "Shop": "ui_nav_label",
+            "Menu": "ui_nav_label",
+            "Quest": "ui_icon_label",
+            "Start": "ui_button_label",
+        }
+        for text, reason in expected_skips.items():
+            block = debug_by_text[text]
+            self.assertTrue(block["ui_screen_mode"], text)
+            self.assertTrue(block["ui_like"], text)
+            self.assertEqual(block["block_role"], reason)
+            self.assertFalse(block["can_translate"], text)
+            self.assertFalse(block["can_mask"], text)
+            self.assertFalse(block["can_inpaint"], text)
+            self.assertFalse(block["can_render"], text)
+            self.assertFalse(block["can_group"], text)
+            self.assertEqual(block["skipped_reason"], reason)
+            self.assertFalse(block["enters_translation"], text)
+            self.assertFalse(block["enters_image_processing"], text)
+
+            record = fit_by_text[text]
+            self.assertEqual(record["block_role"], reason)
+            self.assertTrue(record["ui_screen_mode"])
+            self.assertTrue(record["ui_like"])
+            self.assertFalse(record["can_translate"])
+            self.assertFalse(record["can_mask"])
+            self.assertFalse(record["can_inpaint"])
+            self.assertFalse(record["can_render"])
+            self.assertEqual(record["skipped_reason"], reason)
+            self.assertFalse(record["whether_used_for_mask"])
+            self.assertFalse(record["whether_used_for_render"])
+
+        normal_block = debug_by_text["Welcome to the event briefing"]
+        self.assertTrue(normal_block["ui_screen_mode"])
+        self.assertEqual(normal_block["block_role"], "text")
+        self.assertTrue(normal_block["can_translate"])
+        self.assertTrue(normal_block["can_render"])
+        self.assertEqual(text_groups_data["group_count"], 0)
+        skipped_reasons = {
+            item["skipped_reason"]
+            for item in text_groups_data["skipped_candidates"]
+        }
+        self.assertIn("ui_player_name", skipped_reasons)
+
+    def test_pipeline_keeps_manga_region_blocks_out_of_ui_screen_mode(self) -> None:
+        captured_translation: dict = {}
+        captured_mask: dict = {}
+        captured_render: dict = {}
+
+        def fake_debug_mask(**kwargs) -> Path:
+            captured_mask["ocr_result"] = kwargs["ocr_result"]
+            mask_path = kwargs["debug_mask_dir"] / f"{kwargs['image_id']}_mask.png"
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (220, 180), 255).save(mask_path)
+            return mask_path
+
+        def fake_debug_rendered(
+            image_path: Path,
+            translation_items: list[dict],
+            debug_rendered_dir: Path,
+            image_id: str,
+        ) -> Path:
+            captured_render["items"] = translation_items
+            return self._fake_debug_rendered(
+                image_path=image_path,
+                translation_items=translation_items,
+                debug_rendered_dir=debug_rendered_dir,
+                image_id=image_id,
+            )
+
+        def fake_translation_result(job_id: str, ocr_result: dict) -> dict:
+            captured_translation["ocr_result"] = copy.deepcopy(ocr_result)
+            return self._make_translation_result(job_id, ocr_result)
+
+        regions = [
+            TextRegion(
+                id="bubble-1",
+                region_type="bubble",
+                bbox=(20, 20, 180, 150),
+                polygon=[[20, 20], [180, 20], [180, 150], [20, 150]],
+                score=0.91,
+                linked_block_ids=["layout_a", "layout_b"],
+            )
+        ]
+        fake_ocr_result = {
+            "job_id": "job-layout",
+            "image_width": 220,
+            "image_height": 180,
+            "blocks": [
+                self._make_ocr_block("a", "Help", (45, 50, 90, 72)),
+                self._make_ocr_block("b", "me", (96, 52, 122, 74)),
+                self._make_ocr_block("c", "2", (185, 10, 198, 24)),
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
+        }
+
+        result, root = self._run_route_with_valid_image_size(
+            image_size=(220, 180),
+            fake_ocr_result=fake_ocr_result,
+            translation_side_effect=fake_translation_result,
+            rendered_side_effect=fake_debug_rendered,
+            mask_side_effect=fake_debug_mask,
+            regions_return_value=regions,
+        )
+
+        translation_blocks = captured_translation["ocr_result"]["blocks"]
+        mask_blocks = captured_mask["ocr_result"]["blocks"]
+        render_items = captured_render["items"]
+        self.assertIn("text_group_bubble-1", [block["id"] for block in translation_blocks])
+        self.assertIn("text_group_bubble-1", [block["id"] for block in mask_blocks])
+        self.assertIn("text_group_bubble-1", [item["block_id"] for item in render_items])
+
+        render_fit_path = root / "debug" / "layout" / f"{result['job_id']}_render_fit.json"
+        render_fit_data = json.loads(render_fit_path.read_text(encoding="utf-8"))
+        group_record = next(
+            record for record in render_fit_data["records"]
+            if record["block_id"] == "text_group_bubble-1"
+        )
+        self.assertFalse(group_record["ui_screen_mode"])
+        self.assertTrue(group_record["can_translate"])
+        self.assertTrue(group_record["can_render"])
+
     def _run_route_with(self, fake_ocr_result: dict, translation_side_effect) -> dict:
         class FakeUpload:
             filename = "sample.png"
@@ -858,6 +1056,26 @@ class LayoutPipelineTests(unittest.TestCase):
                     text="Hello World",
                     bbox=(1, 1, 7, 7),
                 ),
+            ],
+            "raw": {"mode": "test"},
+            "warnings": [],
+        }
+
+    def _make_game_ui_ocr_result(self) -> dict:
+        return {
+            "job_id": "job-layout",
+            "image_width": 300,
+            "image_height": 180,
+            "blocks": [
+                self._make_ocr_block("player", "CommanderSalt", (12, 8, 84, 24)),
+                self._make_ocr_block("level", "LV. 90", (90, 8, 132, 24)),
+                self._make_ocr_block("energy", "240/240", (184, 8, 232, 24)),
+                self._make_ocr_block("gold", "322,075,156", (198, 30, 286, 46)),
+                self._make_ocr_block("quest", "Quest", (12, 72, 45, 90)),
+                self._make_ocr_block("start", "Start", (224, 74, 264, 96)),
+                self._make_ocr_block("body", "Welcome to the event briefing", (50, 86, 230, 118)),
+                self._make_ocr_block("shop", "Shop", (36, 154, 72, 172)),
+                self._make_ocr_block("menu", "Menu", (226, 154, 264, 172)),
             ],
             "raw": {"mode": "test"},
             "warnings": [],
