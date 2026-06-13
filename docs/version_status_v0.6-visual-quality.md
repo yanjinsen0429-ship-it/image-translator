@@ -1303,3 +1303,85 @@ OK
 - This step does not add WebP support to PaddleOCR.
 - This step does not modify OCR, translation, frontend, mask, inpaint, render, layout, text grouping, or UI guard behavior.
 - `storage/debug/pip_freeze_before_ocr_fix.txt` is a local debug reference and is not committed.
+
+## Step 5F Visual Regression Sample Workflow
+
+### Goal
+
+Document and enforce the local visual-regression sample/output workflow.
+
+This step is documentation and Git hygiene only. It does not change business code, OCR providers, translation providers, frontend, rendering, mask, inpaint, layout, text grouping, UI guard behavior, or PaddleOCR runtime code.
+
+### Git Ignore Rules
+
+The visual regression output directory is local-only:
+
+```text
+storage/visual_regression/
+```
+
+It is ignored by Git and must not be committed.
+
+The debug directory contents are also local-only. The repository keeps only the existing `.gitkeep` placeholder:
+
+```text
+storage/debug/*
+!storage/debug/.gitkeep
+```
+
+The current manual visual-regression sample directory is also local-only:
+
+```text
+tests/visual_samples/
+```
+
+It is ignored for now because the project has not yet defined a committed sample-asset policy. If future formal regression fixtures are needed, that should be designed separately instead of committing ad hoc local samples.
+
+### Sample Format
+
+Formal visual-regression OCR checks should use:
+
+```text
+jpg / jpeg / png
+```
+
+With the current pinned Windows CPU runtime:
+
+```text
+paddleocr==3.2.0
+paddlepaddle==3.1.1
+paddlex==3.2.1
+```
+
+`webp` files are not treated as valid formal OCR regression samples. Local `webp` originals may be kept for reference, but visual regression should run against `jpg` or `png` copies.
+
+The local `storage/visual_regression/png_samples_latest/` directory is a temporary working directory used to avoid duplicate `webp` / `png` sample runs. It is not committed.
+
+### Real OCR Requirement
+
+Visual regression is only valid when real OCR runs successfully.
+
+If PaddleOCR fails and the backend falls back to mock / fallback OCR, the result must not be treated as a valid visual quality result. The visual-regression report should mark fallback / mock OCR as `FAIL`.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 150 tests
+OK
+```
+
+### Known Limits
+
+- This step does not delete local visual-regression outputs.
+- This step does not delete local sample images or original `webp` files.
+- This step does not add sample images to Git.
+- This step does not change the visual-regression script behavior.
+- This step does not start Step 6.

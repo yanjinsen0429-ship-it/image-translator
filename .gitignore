@@ -5,6 +5,8 @@ __pycache__/
 storage/uploads/*
 storage/outputs/*
 storage/debug/*
+storage/visual_regression/
+tests/visual_samples/
 
 !storage/uploads/.gitkeep
 !storage/outputs/.gitkeep

@@ -157,6 +157,15 @@ http://127.0.0.1:8000
 .\.venv\Scripts\python.exe -m unittest discover tests
 ```
 
+Visual regression uses local manual samples and local output artifacts. By default, these paths are ignored by Git and should not be committed:
+
+```text
+tests/visual_samples/
+storage/visual_regression/
+```
+
+Use `jpg` or `png` samples for real OCR regression checks. With the current pinned PaddleOCR runtime, `webp` files are not treated as formal OCR regression samples.
+
 ## 当前目录结构
 
 ```text
