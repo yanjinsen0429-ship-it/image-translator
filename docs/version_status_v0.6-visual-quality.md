@@ -1099,3 +1099,133 @@ storage/debug/layout/manual_step5a_manga_render_fit_overlay.png
 - It does not fit text to bubble shapes; it only fits rectangular bboxes.
 - It does not change OCR, translation, provider behavior, mask, inpaint, frontend, layout detection, region detection, or `block_type`.
 - It does not address logo / brand skip; `trust name` remains a known limit.
+
+## Step 5T Visual Regression Tool
+
+### Status
+
+Done
+
+### Goal
+
+- Add a repeatable visual regression tool for batch-running local sample images.
+- Reduce manual browser uploads when checking render / mask / debug regressions.
+- Provide a stable baseline tool before any future Step 5B-redux / 5C / 5D work.
+- Keep OCR provider, translation provider, frontend, rendering rules, render-fit rules, mask, inpaint, and business pipeline behavior unchanged.
+
+### Usage
+
+Place visual samples in:
+
+```text
+tests/visual_samples/
+```
+
+Supported image extensions:
+
+```text
+png / jpg / jpeg / webp
+```
+
+Uppercase extensions such as `.JPG`, `.JPEG`, `.WEBP`, and `.PNG` are supported.
+
+Run:
+
+```powershell
+python scripts/run_visual_regression.py
+```
+
+Optional arguments:
+
+```powershell
+python scripts/run_visual_regression.py --samples tests/visual_samples --output storage/visual_regression/latest
+python scripts/run_visual_regression.py --open
+```
+
+The tool calls the running local API:
+
+```text
+http://127.0.0.1:8000/api/images/translate
+```
+
+using multipart form upload with the same `file` field used by the frontend.
+
+### Output
+
+Default output directory:
+
+```text
+storage/visual_regression/latest/
+```
+
+Generated files:
+
+```text
+storage/visual_regression/latest/index.html
+storage/visual_regression/latest/summary.json
+storage/visual_regression/latest/<sample_name>/input.png
+storage/visual_regression/latest/<sample_name>/output.png
+storage/visual_regression/latest/<sample_name>/render_fit.json
+storage/visual_regression/latest/<sample_name>/render_fit_overlay.png
+storage/visual_regression/latest/<sample_name>/regions.json
+storage/visual_regression/latest/<sample_name>/region_overlay.png
+storage/visual_regression/latest/<sample_name>/layout_blocks.json
+storage/visual_regression/latest/<sample_name>/layout_overlay.png
+storage/visual_regression/latest/<sample_name>/mask.png
+storage/visual_regression/latest/<sample_name>/inpainted.png
+storage/visual_regression/latest/<sample_name>/rendered.png
+```
+
+Missing debug artifacts do not crash the run; they are recorded in `summary.json`.
+
+### PASS / WARN / FAIL
+
+`FAIL` means the sample is not suitable as a passing visual-regression result:
+
+- output image is missing.
+- `render_fit.json` is missing.
+- OCR fallback / mock OCR was used.
+- a complex sample produced only one render-fit record.
+- complex background dense text is still inline rendered.
+- short text with an abnormal large bbox is still inline rendered.
+- skipped records still indicate render or image-processing entry.
+
+`WARN` means the output should be inspected:
+
+- inline selected font size is below 10.
+- overflow is present.
+- skipped block has no skipped reason.
+- noise-like text is still inline rendered.
+- inline render count is zero for multi-record samples.
+- skipped count is very high.
+- optional debug files are missing.
+
+`PASS` means the automatic checks found no blocking or warning condition. It does not replace final human visual judgment.
+
+### Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Coverage added:
+
+- sample scanning for `png / jpg / jpeg / webp`.
+- uppercase extension scanning.
+- empty sample directory behavior.
+- `summary.json` generation.
+- `index.html` generation.
+- render-fit metrics parsing.
+- mock / fallback OCR marked as `FAIL`.
+- suspicious single-record complex samples marked as `FAIL`.
+- missing debug files recorded without crashing.
+
+### Known Limits
+
+- This tool requires the local backend service to be running for real API mode.
+- If PaddleOCR fails and the backend falls back to mock OCR, the sample is marked `FAIL`.
+- The tool is a regression aid, not an aesthetic judge.
+- It does not modify rendering, render-fit, OCR, translation, provider, frontend, mask, or inpaint behavior.
+- It does not continue or restore the reverted Step 5B / 5B-hotfix work.
