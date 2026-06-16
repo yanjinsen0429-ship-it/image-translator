@@ -22,6 +22,7 @@ from app.services.layout_service import (
     export_layout_debug_overlay,
     merge_ocr_blocks,
 )
+from app.services.mode_service import decide_image_mode, export_mode_debug_json
 from app.services.ocr_service import create_ocr_result
 from app.services.rendering_service import RenderingService
 from app.services.render_fit_service import (
@@ -111,6 +112,7 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         logger.exception("Failed to export debug text regions for job %s", job_id)
     translation_input = _with_ui_screen_guards(translation_input, regions=regions)
     skipped_text_group_candidates: list[dict] = []
+    text_groups = []
     try:
         text_groups = build_text_groups(
             layout_blocks=translation_input.get("blocks", []),
@@ -196,6 +198,18 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
             layout_blocks=translation_input.get("blocks", []),
             render_fit_records=render_fit_records,
             output_path=settings.debug_dir / "layout" / f"{job_id}_render_fit_overlay.png",
+        )
+        mode_decision = decide_image_mode(
+            layout_blocks=translation_input.get("blocks", []),
+            render_fit_records=render_fit_records,
+            text_groups=text_groups,
+            translation_result=translation_result,
+            regions=regions,
+        )
+        export_mode_debug_json(
+            mode_decision=mode_decision,
+            output_path=settings.debug_dir / "layout" / f"{job_id}_mode.json",
+            job_id=job_id,
         )
     except Exception:
         logger.exception("Failed to export debug render fit artifacts for job %s", job_id)

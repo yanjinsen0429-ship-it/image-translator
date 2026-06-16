@@ -166,6 +166,28 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertEqual(metrics["vertical_group_count"], 1)
         self.assertEqual(metrics["average_blocks_per_group"], 1.5)
 
+    def test_mode_decision_is_included_in_sample_result(self):
+        sample = self.tool.Sample(Path("02_game_ui_home.png"), "02_game_ui_home")
+        payload = {
+            "job_id": "job-mode",
+            "ocr_result": {"warnings": [], "blocks": [{"text": "100"}]},
+            "translation_result": {"items": []},
+        }
+
+        result = self.tool.build_sample_result(
+            sample=sample,
+            payload=payload,
+            http_status=200,
+            sample_dir=self.root,
+            copied_paths={"output": "out.png", "render_fit": "render_fit.json", "mode": "mode.json"},
+            records=[{"can_render_inline": False, "skipped_reason": "ui_nav_label"}],
+            missing_debug_files=[],
+            mode_decision={"mode": "game_ui", "debug_only": True, "reasons": ["no_inline_render"]},
+        )
+
+        self.assertEqual(result["mode"], "game_ui")
+        self.assertEqual(result["mode_decision"]["reasons"], ["no_inline_render"])
+
     def test_mock_or_fallback_ocr_marks_sample_failed(self):
         sample = self.tool.Sample(Path("05_complex_background_small_text.png"), "05_complex_background_small_text")
         payload = {
@@ -325,6 +347,41 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertEqual(saved["total_samples"], 1)
         self.assertIn("04_clean_single_bubble", (output_dir / "index.html").read_text(encoding="utf-8"))
 
+    def test_report_html_displays_mode_decision(self):
+        output_dir = self.root / "report"
+        summary = {
+            "run_time": "2026-06-13T00:00:00+00:00",
+            "total_samples": 1,
+            "pass_count": 1,
+            "warn_count": 0,
+            "fail_count": 0,
+            "report_dir": str(output_dir),
+            "samples": [
+                {
+                    "sample_name": "02_game_ui_home",
+                    "status": "PASS",
+                    "fail_reasons": [],
+                    "warn_reasons": [],
+                    "paths": {},
+                    "metrics": {"record_count": 44},
+                    "skipped_reason_counts": {"ui_nav_label": 16},
+                    "mode": "game_ui",
+                    "mode_decision": {
+                        "mode": "game_ui",
+                        "debug_only": True,
+                        "reasons": ["high_ui_guard_skipped_ratio"],
+                    },
+                }
+            ],
+        }
+
+        self.tool.write_reports(summary, output_dir)
+        html = (output_dir / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("mode=<code>game_ui</code>", html)
+        self.assertIn("Mode Decision", html)
+        self.assertIn("high_ui_guard_skipped_ratio", html)
+
     def test_index_html_uses_paths_relative_to_report_dir(self):
         output_dir = self.root / "storage" / "visual_regression" / "one"
         sample_dir = output_dir / "04_clean_single_bubble"
@@ -334,6 +391,7 @@ class VisualRegressionToolTests(unittest.TestCase):
         self._write_image(sample_dir / "text_groups_overlay.png")
         self._write_image(sample_dir / "region_overlay.png")
         self._write_image(sample_dir / "layout_overlay.png")
+        (sample_dir / "mode.json").write_text("{}", encoding="utf-8")
         self._write_image(sample_dir / "mask.png")
         self._write_image(sample_dir / "inpainted.png")
         self._write_image(sample_dir / "rendered.png")
@@ -357,6 +415,7 @@ class VisualRegressionToolTests(unittest.TestCase):
                         "text_groups_overlay": str(sample_dir / "text_groups_overlay.png"),
                         "region_overlay": str(sample_dir / "region_overlay.png"),
                         "layout_overlay": str(sample_dir / "layout_overlay.png"),
+                        "mode": str(sample_dir / "mode.json"),
                         "mask": str(sample_dir / "mask.png"),
                         "inpainted": str(sample_dir / "inpainted.png"),
                         "rendered": str(sample_dir / "rendered.png"),
@@ -376,6 +435,7 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertIn('src="04_clean_single_bubble/text_groups_overlay.png"', html)
         self.assertIn('src="04_clean_single_bubble/region_overlay.png"', html)
         self.assertIn('src="04_clean_single_bubble/layout_overlay.png"', html)
+        self.assertNotIn('src="04_clean_single_bubble/mode.json"', html)
         self.assertIn('src="04_clean_single_bubble/mask.png"', html)
         self.assertIn('src="04_clean_single_bubble/inpainted.png"', html)
         self.assertIn('src="04_clean_single_bubble/rendered.png"', html)

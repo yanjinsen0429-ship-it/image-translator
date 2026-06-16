@@ -264,6 +264,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
     copied_paths, missing_debug_files = collect_artifacts(payload=payload, job_id=job_id, sample_dir=sample_dir)
     records = load_render_fit_records(sample_dir / "render_fit.json")
     text_group_metrics = collect_text_group_metrics(load_json_payload(sample_dir / "text_groups.json"))
+    mode_decision = load_json_payload(sample_dir / "mode.json")
     return build_sample_result(
         sample=sample,
         payload=payload,
@@ -273,6 +274,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
         records=records,
         missing_debug_files=missing_debug_files,
         text_group_metrics=text_group_metrics,
+        mode_decision=mode_decision,
     )
 
 
@@ -322,6 +324,7 @@ def collect_artifacts(
         "layout_overlay": layout_dir / f"{job_id}_layout_overlay.png",
         "text_groups": layout_dir / f"{job_id}_text_groups.json",
         "text_groups_overlay": layout_dir / f"{job_id}_text_groups_overlay.png",
+        "mode": layout_dir / f"{job_id}_mode.json",
         "mask": PROJECT_ROOT / "storage" / "debug" / "mask" / f"{job_id}_mask.png",
         "inpainted": PROJECT_ROOT / "storage" / "debug" / "inpainted" / f"{job_id}_inpainted.png",
         "rendered": PROJECT_ROOT / "storage" / "debug" / "rendered" / f"{job_id}_rendered.png",
@@ -335,6 +338,7 @@ def collect_artifacts(
         "layout_overlay": sample_dir / "layout_overlay.png",
         "text_groups": sample_dir / "text_groups.json",
         "text_groups_overlay": sample_dir / "text_groups_overlay.png",
+        "mode": sample_dir / "mode.json",
         "mask": sample_dir / "mask.png",
         "inpainted": sample_dir / "inpainted.png",
         "rendered": sample_dir / "rendered.png",
@@ -360,6 +364,7 @@ def build_sample_result(
     error_message: str | None = None,
     extra_fail_reasons: list[str] | None = None,
     text_group_metrics: dict[str, Any] | None = None,
+    mode_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metrics, skipped_reason_counts = collect_metrics(records)
     metrics.update(text_group_metrics or empty_text_group_metrics())
@@ -388,6 +393,8 @@ def build_sample_result(
         "suspicious_single_record": suspicious_single,
         "metrics": metrics,
         "skipped_reason_counts": skipped_reason_counts,
+        "mode": (mode_decision or {}).get("mode"),
+        "mode_decision": mode_decision or {},
         "missing_debug_files": missing_debug_files,
         "error_message": error_message,
     }
@@ -590,6 +597,7 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
     )
     metrics = escape(json.dumps(sample.get("metrics", {}), ensure_ascii=False, indent=2))
     skipped = escape(json.dumps(sample.get("skipped_reason_counts", {}), ensure_ascii=False, indent=2))
+    mode_decision = escape(json.dumps(sample.get("mode_decision", {}), ensure_ascii=False, indent=2))
     return f"""
 <section class="sample {status}">
   <h2>{escape(sample.get("sample_name"))} [{status}]</h2>
@@ -599,6 +607,7 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
     record_count=<code>{escape(sample.get("record_count"))}</code>
     translation_item_count=<code>{escape(sample.get("translation_item_count"))}</code>
     used_mock_or_fallback_ocr=<code>{escape(sample.get("used_mock_or_fallback_ocr"))}</code>
+    mode=<code>{escape(sample.get("mode") or "-")}</code>
   </p>
   <p>fail: {escape(', '.join(sample.get("fail_reasons", [])) or "-")}</p>
   <p>warn: {escape(', '.join(sample.get("warn_reasons", [])) or "-")}</p>
@@ -607,6 +616,8 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
   <pre>{metrics}</pre>
   <h3>Skipped Reasons</h3>
   <pre>{skipped}</pre>
+  <h3>Mode Decision</h3>
+  <pre>{mode_decision}</pre>
 </section>
 """
 
