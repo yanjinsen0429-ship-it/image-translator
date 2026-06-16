@@ -125,3 +125,146 @@ python -m unittest discover -s tests -p "test*.py" -v
 ```
 
 Step 1C must pass full unittest before commit.
+
+## Step 2A Complex Small Text Translate-Only Debug
+
+### Goal
+
+Add debug-only classification for complex-background small text. The purpose is to separate text-like fragments that may be useful later from inline-renderable text and OCR noise, without changing the current output pipeline.
+
+Primary target sample:
+
+- `05_complex_background_small_text`
+
+### Changes
+
+- Added `app/services/small_text_service.py`.
+- Added small text debug export:
+  - `storage/debug/layout/{job_id}_small_text.json`
+- Updated the visual regression tool to copy per-sample `small_text.json`.
+- Updated visual regression `summary.json` / HTML to include small text classification counts.
+- Added unit tests for small text classification and visual regression summary integration.
+
+### Classification Types
+
+- `translate_only`
+- `inline_render`
+- `ignored_noise`
+- `unknown`
+
+### Rule Summary
+
+- `translate_only`: text-like English fragments in `complex_background` mode that are currently skipped and may need future line reconstruction.
+- `inline_render`: blocks that already have translated text and are currently renderable.
+- `ignored_noise`: low-confidence single characters, tiny noise-like boxes, or very large low-confidence single-character boxes.
+- `unknown`: fallback when evidence is insufficient.
+
+### Debug Payload
+
+Each record includes:
+
+- `block_id`
+- `text`
+- `bbox`
+- `confidence`
+- `skipped_reason`
+- `translated_text`
+- `can_render_inline`
+- `classification`
+- `reasons`
+- `debug_only`
+
+The payload summary includes:
+
+- `translate_only_count`
+- `inline_render_count`
+- `ignored_noise_count`
+- `unknown_count`
+
+### Non-Goals
+
+Step 2A does not:
+
+- change OCR behavior
+- change translation provider calls
+- change mask / inpaint / render inputs
+- release skipped blocks
+- make `translate_only` enter the real translation provider
+- make `translate_only` enter mask / inpaint / render
+- fix noisy inline text
+- fix manga overflow
+- implement line reconstruction
+
+### Known Limits
+
+- `translate_only` is a debug classification only; it does not mean the text is in the final translation result.
+- Complex small text visual quality is not fixed in this step.
+- Line reconstruction is still future work.
+
+### Tests
+
+Run:
+
+```text
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Step 2A must pass full unittest before commit.
+
+Actual result:
+
+```text
+Ran 171 tests
+OK
+```
+
+### Visual Regression
+
+Recommended command:
+
+```text
+python scripts/run_visual_regression.py --samples storage/visual_regression/png_samples_latest --output storage/visual_regression/v0.7_step2a --timeout 300
+```
+
+Expected scope:
+
+- `05_complex_background_small_text` should include `small_text.json`.
+- `05_complex_background_small_text` should remain `complex_background`.
+- `02_game_ui_home` should remain `game_ui` with `translation_item_count=0` and `inline_render_count=0`.
+- `06_bw_manga_page` and `07_color_vertical_manga` should remain `manga`.
+- This step is debug-only, so visual PASS/WARN status is not expected to materially improve.
+
+Actual result:
+
+```text
+samples: storage/visual_regression/png_samples_latest
+output: storage/visual_regression/v0.7_step2a
+PASS=3, WARN=4, FAIL=0
+```
+
+Mode checks:
+
+```text
+01_phone_ui_document: document
+02_game_ui_home: game_ui
+03_game_double_bubble: generic
+04_clean_single_bubble: generic
+05_complex_background_small_text: complex_background
+06_bw_manga_page: manga
+07_color_vertical_manga: manga
+```
+
+`05_complex_background_small_text` small text classification summary:
+
+```text
+translate_only_count=71
+inline_render_count=1
+ignored_noise_count=2
+unknown_count=7
+```
+
+Protected sample checks:
+
+- `02_game_ui_home` remains `game_ui`, with `translation_item_count=0` and `inline_render_count=0`.
+- `06_bw_manga_page` remains `manga`.
+- `07_color_vertical_manga` remains `manga`.

@@ -188,6 +188,37 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertEqual(result["mode"], "game_ui")
         self.assertEqual(result["mode_decision"]["reasons"], ["no_inline_render"])
 
+    def test_small_text_summary_is_included_in_sample_result(self):
+        sample = self.tool.Sample(Path("05_complex_background_small_text.png"), "05_complex_background_small_text")
+        payload = {
+            "job_id": "job-small-text",
+            "ocr_result": {"warnings": [], "blocks": [{"text": "hello"}]},
+            "translation_result": {"items": [{"block_id": "b1"}]},
+        }
+        small_text_payload = {
+            "classification_summary": {
+                "translate_only_count": 3,
+                "inline_render_count": 1,
+                "ignored_noise_count": 2,
+                "unknown_count": 4,
+            }
+        }
+
+        result = self.tool.build_sample_result(
+            sample=sample,
+            payload=payload,
+            http_status=200,
+            sample_dir=self.root,
+            copied_paths={"output": "out.png", "render_fit": "render_fit.json", "small_text": "small_text.json"},
+            records=[{"can_render_inline": True}],
+            missing_debug_files=[],
+            small_text_payload=small_text_payload,
+        )
+
+        self.assertEqual(result["small_text_classification_summary"]["translate_only_count"], 3)
+        self.assertEqual(result["metrics"]["small_text_translate_only_count"], 3)
+        self.assertEqual(result["metrics"]["small_text_inline_render_count"], 1)
+
     def test_mock_or_fallback_ocr_marks_sample_failed(self):
         sample = self.tool.Sample(Path("05_complex_background_small_text.png"), "05_complex_background_small_text")
         payload = {
@@ -256,6 +287,27 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("missing_render_fit_json", result["fail_reasons"])
         self.assertEqual(result["missing_debug_files"], ["render_fit.json", "region_overlay.png"])
+
+    def test_missing_small_text_debug_file_does_not_fail(self):
+        sample = self.tool.Sample(Path("05_complex_background_small_text.png"), "05_complex_background_small_text")
+        payload = {
+            "job_id": "job-small-text-missing",
+            "ocr_result": {"warnings": [], "blocks": [{"text": "hello"}]},
+            "translation_result": {"items": [{"block_id": "layout_block-1"}]},
+        }
+
+        result = self.tool.build_sample_result(
+            sample=sample,
+            payload=payload,
+            http_status=200,
+            sample_dir=self.root,
+            copied_paths={"output": "out.png", "render_fit": "render_fit.json"},
+            records=[{"can_render_inline": True}],
+            missing_debug_files=["small_text.json"],
+        )
+
+        self.assertNotIn("small_text.json", result["fail_reasons"])
+        self.assertNotIn("missing_render_fit_json", result["fail_reasons"])
 
     def test_request_timeout_marks_sample_failed(self):
         sample_path = self.root / "01_phone_ui_document.png"
@@ -371,6 +423,12 @@ class VisualRegressionToolTests(unittest.TestCase):
                         "debug_only": True,
                         "reasons": ["high_ui_guard_skipped_ratio"],
                     },
+                    "small_text_classification_summary": {
+                        "translate_only_count": 0,
+                        "inline_render_count": 0,
+                        "ignored_noise_count": 0,
+                        "unknown_count": 0,
+                    },
                 }
             ],
         }
@@ -381,6 +439,7 @@ class VisualRegressionToolTests(unittest.TestCase):
         self.assertIn("mode=<code>game_ui</code>", html)
         self.assertIn("Mode Decision", html)
         self.assertIn("high_ui_guard_skipped_ratio", html)
+        self.assertIn("Small Text Classification", html)
 
     def test_index_html_uses_paths_relative_to_report_dir(self):
         output_dir = self.root / "storage" / "visual_regression" / "one"

@@ -265,6 +265,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
     records = load_render_fit_records(sample_dir / "render_fit.json")
     text_group_metrics = collect_text_group_metrics(load_json_payload(sample_dir / "text_groups.json"))
     mode_decision = load_json_payload(sample_dir / "mode.json")
+    small_text_payload = load_json_payload(sample_dir / "small_text.json")
     return build_sample_result(
         sample=sample,
         payload=payload,
@@ -275,6 +276,7 @@ def run_sample(api_client: Any, sample: Sample, sample_dir: Path) -> dict[str, A
         missing_debug_files=missing_debug_files,
         text_group_metrics=text_group_metrics,
         mode_decision=mode_decision,
+        small_text_payload=small_text_payload,
     )
 
 
@@ -325,6 +327,7 @@ def collect_artifacts(
         "text_groups": layout_dir / f"{job_id}_text_groups.json",
         "text_groups_overlay": layout_dir / f"{job_id}_text_groups_overlay.png",
         "mode": layout_dir / f"{job_id}_mode.json",
+        "small_text": layout_dir / f"{job_id}_small_text.json",
         "mask": PROJECT_ROOT / "storage" / "debug" / "mask" / f"{job_id}_mask.png",
         "inpainted": PROJECT_ROOT / "storage" / "debug" / "inpainted" / f"{job_id}_inpainted.png",
         "rendered": PROJECT_ROOT / "storage" / "debug" / "rendered" / f"{job_id}_rendered.png",
@@ -339,6 +342,7 @@ def collect_artifacts(
         "text_groups": sample_dir / "text_groups.json",
         "text_groups_overlay": sample_dir / "text_groups_overlay.png",
         "mode": sample_dir / "mode.json",
+        "small_text": sample_dir / "small_text.json",
         "mask": sample_dir / "mask.png",
         "inpainted": sample_dir / "inpainted.png",
         "rendered": sample_dir / "rendered.png",
@@ -365,9 +369,12 @@ def build_sample_result(
     extra_fail_reasons: list[str] | None = None,
     text_group_metrics: dict[str, Any] | None = None,
     mode_decision: dict[str, Any] | None = None,
+    small_text_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metrics, skipped_reason_counts = collect_metrics(records)
     metrics.update(text_group_metrics or empty_text_group_metrics())
+    small_text_summary = collect_small_text_summary(small_text_payload)
+    metrics.update(small_text_metrics(small_text_summary))
     used_mock = used_mock_or_fallback_ocr(payload)
     translation_items = (payload.get("translation_result") or {}).get("items", [])
     suspicious_single = (
@@ -395,6 +402,7 @@ def build_sample_result(
         "skipped_reason_counts": skipped_reason_counts,
         "mode": (mode_decision or {}).get("mode"),
         "mode_decision": mode_decision or {},
+        "small_text_classification_summary": small_text_summary,
         "missing_debug_files": missing_debug_files,
         "error_message": error_message,
     }
@@ -449,6 +457,25 @@ def empty_text_group_metrics() -> dict[str, Any]:
         "grouped_block_count": 0,
         "vertical_group_count": 0,
         "average_blocks_per_group": 0,
+    }
+
+
+def collect_small_text_summary(payload: dict[str, Any] | None) -> dict[str, int]:
+    summary = (payload or {}).get("classification_summary") or {}
+    return {
+        "translate_only_count": int(summary.get("translate_only_count") or 0),
+        "inline_render_count": int(summary.get("inline_render_count") or 0),
+        "ignored_noise_count": int(summary.get("ignored_noise_count") or 0),
+        "unknown_count": int(summary.get("unknown_count") or 0),
+    }
+
+
+def small_text_metrics(summary: dict[str, int]) -> dict[str, int]:
+    return {
+        "small_text_translate_only_count": summary["translate_only_count"],
+        "small_text_inline_render_count": summary["inline_render_count"],
+        "small_text_ignored_noise_count": summary["ignored_noise_count"],
+        "small_text_unknown_count": summary["unknown_count"],
     }
 
 
@@ -598,6 +625,7 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
     metrics = escape(json.dumps(sample.get("metrics", {}), ensure_ascii=False, indent=2))
     skipped = escape(json.dumps(sample.get("skipped_reason_counts", {}), ensure_ascii=False, indent=2))
     mode_decision = escape(json.dumps(sample.get("mode_decision", {}), ensure_ascii=False, indent=2))
+    small_text_summary = escape(json.dumps(sample.get("small_text_classification_summary", {}), ensure_ascii=False, indent=2))
     return f"""
 <section class="sample {status}">
   <h2>{escape(sample.get("sample_name"))} [{status}]</h2>
@@ -618,6 +646,8 @@ def render_sample_html(sample: dict[str, Any], report_dir: Path) -> str:
   <pre>{skipped}</pre>
   <h3>Mode Decision</h3>
   <pre>{mode_decision}</pre>
+  <h3>Small Text Classification</h3>
+  <pre>{small_text_summary}</pre>
 </section>
 """
 

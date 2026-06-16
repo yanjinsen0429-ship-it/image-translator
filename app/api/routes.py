@@ -35,6 +35,10 @@ from app.services.region_service import (
     export_region_debug_json,
     export_region_debug_overlay,
 )
+from app.services.small_text_service import (
+    classify_complex_small_text_blocks,
+    export_small_text_debug_json,
+)
 from app.services.text_group_service import (
     apply_text_groups,
     build_text_groups,
@@ -209,6 +213,16 @@ async def translate_image(file: UploadFile = File(...)) -> dict:
         export_mode_debug_json(
             mode_decision=mode_decision,
             output_path=settings.debug_dir / "layout" / f"{job_id}_mode.json",
+            job_id=job_id,
+        )
+        small_text_payload = classify_complex_small_text_blocks(
+            sample_mode=mode_decision.get("mode"),
+            layout_blocks=translation_input.get("blocks", []),
+            render_fit_records=render_fit_records,
+        )
+        export_small_text_debug_json(
+            payload=small_text_payload,
+            output_path=settings.debug_dir / "layout" / f"{job_id}_small_text.json",
             job_id=job_id,
         )
     except Exception:
