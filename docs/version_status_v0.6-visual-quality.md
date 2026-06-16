@@ -1385,3 +1385,182 @@ OK
 - This step does not add sample images to Git.
 - This step does not change the visual-regression script behavior.
 - This step does not start Step 6.
+
+## Step 6A Final Verification / Release Candidate Check
+
+### Verification Date
+
+2026-06-16
+
+### Git State
+
+Command:
+
+```powershell
+git status
+git log --oneline -5
+```
+
+Status:
+
+```text
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean
+```
+
+Recent commits:
+
+```text
+9ee3e4e docs: document visual regression sample workflow
+02e9b51 chore: pin PaddleOCR runtime versions
+a0bc66b feat: protect game UI text from rendering
+94ba8aa feat: group manga text regions
+64d5d87 feat: unify renderable blocks for image processing
+```
+
+### Python / OCR Runtime
+
+The v0.6 release candidate was verified with the pinned Windows CPU OCR runtime:
+
+```text
+Python 3.11.9
+paddleocr: 3.2.0
+paddlepaddle: 3.1.1
+paddlex: 3.2.1
+paddle compiled with cuda: False
+```
+
+These pinned versions remain a key stability condition for v0.6. Visual regression results are not valid if PaddleOCR falls back to mock / fallback OCR.
+
+### Unit Tests
+
+Command:
+
+```powershell
+python -m unittest discover -s tests -p "test*.py" -v
+```
+
+Result:
+
+```text
+Ran 150 tests
+OK
+```
+
+### Backend Health
+
+The backend was started from the current `main` code and verified locally:
+
+```text
+http://127.0.0.1:8000/api/health -> 200 {"status":"ok"}
+http://127.0.0.1:8000/docs -> 200
+```
+
+### Visual Regression
+
+Command:
+
+```powershell
+python scripts/run_visual_regression.py --samples storage/visual_regression/png_samples_latest --output storage/visual_regression/latest --timeout 300 --open
+```
+
+Inputs and outputs:
+
+```text
+samples: storage/visual_regression/png_samples_latest
+output: storage/visual_regression/latest
+used_mock_or_fallback_ocr=false for all 7 samples
+```
+
+Overall result:
+
+```text
+PASS: 3
+WARN: 4
+FAIL: 0
+```
+
+Sample results:
+
+```text
+01_phone_ui_document: WARN
+  record_count=17, translation_item_count=16
+  warn=['noise_like_inline']
+
+02_game_ui_home: WARN
+  record_count=44, translation_item_count=0
+  skipped_count=44
+  inline_render_count=0
+  warn=['inline_render_count_zero', 'skipped_count_high', 'missing_debug_file:mask.png', 'missing_debug_file:inpainted.png', 'missing_debug_file:rendered.png']
+
+03_game_double_bubble: PASS
+  record_count=17, translation_item_count=16
+
+04_clean_single_bubble: PASS
+  record_count=1, translation_item_count=1
+
+05_complex_background_small_text: WARN
+  record_count=81, translation_item_count=2
+  skipped_count=80
+  warn=['skipped_count_high']
+
+06_bw_manga_page: WARN
+  record_count=13, translation_item_count=13
+  group_count=8
+  vertical_group_count=5
+  warn=['overflow_records_present', 'noise_like_inline']
+
+07_color_vertical_manga: PASS
+  record_count=11, translation_item_count=7
+  group_count=5
+  vertical_group_count=5
+```
+
+### UI Guard Verification
+
+`02_game_ui_home` is expected to have no inline renderable blocks under the v0.6 UI / Game Screen Guard:
+
+```text
+record_count: 44
+translation_item_count: 0
+skipped_count: 44
+inline_render_count: 0
+```
+
+Skipped reason distribution:
+
+```text
+ui_icon_label: 18
+ui_resource_number: 4
+ui_player_name: 2
+ui_status_number: 4
+ui_nav_label: 16
+```
+
+For this UI sample, `inline_render_count=0` is expected behavior, not a release blocker. Missing `mask.png`, `inpainted.png`, and `rendered.png` is also expected because there are no renderable blocks; the pipeline correctly skips downstream image processing instead of generating empty debug artifacts.
+
+### Regression Notes
+
+- `03_game_double_bubble` passed and did not show automated regression indicators.
+- `04_clean_single_bubble` passed and remains a clean single-bubble baseline.
+- `06_bw_manga_page` remains `WARN` because of overflow / noise risk, but manga grouping is active with `group_count=8` and `vertical_group_count=5`.
+- `07_color_vertical_manga` passed, and vertical grouping remains active with `group_count=5` and `vertical_group_count=5`.
+
+### Known Issues
+
+- `05_complex_background_small_text` remains a known issue. It is not fixed in v0.6 and is deferred to a future complex small text mode.
+- `06_bw_manga_page` still has overflow / noisy inline risk. This does not block v0.6 because text grouping remains active and the current state is documented.
+- More robust noisy inline filtering is still needed after v0.6.
+
+### Release Conclusion
+
+v0.6 release candidate verification passed.
+
+v0.6 can enter the release commit / tag stage with the following deferred items explicitly moved to v0.7 or later:
+
+- Complex small text mode.
+- More robust noisy inline filtering.
+- Overflow quality improvement.
+- Formal `webp` sample support / sample policy, if needed later.
