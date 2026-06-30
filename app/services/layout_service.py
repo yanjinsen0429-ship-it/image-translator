@@ -87,7 +87,7 @@ def classify_block(
         near_top = bbox[1] <= image_height * 0.15
         near_left = bbox[0] <= image_width * 0.25
         brand_like = text.replace(" ", "").isupper() or len(words) == 1
-        if near_top and near_left and brand_like and not is_cta:
+        if near_top and near_left and brand_like and not is_cta and not _is_likely_vertical_dialogue(block):
             return "logo"
 
     if is_short and aspect_ratio >= 2 and is_cta:
@@ -111,6 +111,20 @@ def is_likely_ocr_noise_block(block: dict[str, Any]) -> bool:
     width = bbox_width(bbox)
     height = bbox_height(bbox)
     return width <= 12 and height <= 18 and (width * height) <= 216
+
+
+def _is_likely_vertical_dialogue(block: dict[str, Any]) -> bool:
+    text = str(block.get("text") or "").strip()
+    bbox = block.get("bbox")
+    if bbox is None:
+        return False
+
+    width = bbox_width(bbox)
+    height = bbox_height(bbox)
+    if width <= 0 or height <= 0:
+        return False
+
+    return len(text.replace(" ", "")) >= 5 and height / width >= 3.0 and height >= 120
 
 
 def merge_ocr_blocks(

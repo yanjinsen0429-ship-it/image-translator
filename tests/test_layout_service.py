@@ -111,6 +111,21 @@ class LayoutServiceTests(unittest.TestCase):
 
         self.assertIn(classify_block(block, image_size=(400, 300)), {"logo", "ignored"})
 
+    def test_top_left_vertical_dialogue_is_not_marked_as_logo(self) -> None:
+        for bbox in (
+            (47, 103, 89, 458),
+            (86, 103, 127, 489),
+            (124, 104, 165, 299),
+            (161, 100, 208, 490),
+        ):
+            with self.subTest(bbox=bbox):
+                block = normalize_ocr_block(
+                    make_block("verticaldialogue", bbox, "dialogue"),
+                    index=0,
+                )
+
+                self.assertEqual(classify_block(block, image_size=(1240, 1754)), "normal")
+
     def test_standalone_closing_bracket_is_marked_as_ignored(self) -> None:
         block = normalize_ocr_block(make_block("]", (42, 60, 50, 72), "noise"), index=0)
 
